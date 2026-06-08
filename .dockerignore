@@ -1,0 +1,42 @@
+# Source control and local metadata
+.git
+.github
+.gitignore
+.dockerignore
+
+# Editor settings and local config
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+
+# Documentation and non-runtime assets
+README.md
+loadtest/
+deploy/
+
+# Test files and reports
+**/*_test.go
+coverage.out
+coverage.txt
+*.cov
+
+# Go build outputs and caches
+bin/
+dist/
+build/
+vendor/
+tmp/
+temp/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

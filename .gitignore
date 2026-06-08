@@ -1,0 +1,53 @@
+# Go build artifacts
+bin/
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage and profiling
+coverage.out
+coverage.txt
+*.cov
+*.pprof
+
+# Go workspace and dependency caches
+go.work
+go.work.sum
+
+# Vendor directory is typically regenerated and not committed unless explicitly vendoring
+vendor/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+temp/
+
+# Editor and IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Test and benchmark outputs
+testdata/*.tmp
+
+# Generated Docker and compose state
+docker-data/
+*.pid
