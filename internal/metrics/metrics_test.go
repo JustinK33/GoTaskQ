@@ -8,51 +8,63 @@ import (
 
 type mockRegisterer struct{}
 
-func (mockRegisterer) Register(prometheus.Collector) error { return nil }
-func (mockRegisterer) MustRegister(...prometheus.Collector)  {}
-func (mockRegisterer) Unregister(prometheus.Collector) bool  { return true }
+func (mockRegisterer) Register(prometheus.Collector) error  { return nil }
+func (mockRegisterer) MustRegister(...prometheus.Collector) {}
+func (mockRegisterer) Unregister(prometheus.Collector) bool { return true }
 
 func TestNewRegistry(t *testing.T) {
 	tests := []struct {
 		name      string
 		namespace string
+		subsystem string
 	}{
-		{name: "builds namespace scoped collectors", namespace: "gotaskq"},
+		{name: "builds namespace-scoped collectors", namespace: "gotaskq", subsystem: "worker"},
+		{name: "different namespace", namespace: "myapp", subsystem: "api"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = tc.namespace
-			// Assert that counters, gauges, and histograms are created with the expected labels.
+			r := NewRegistry(tc.namespace, tc.subsystem)
+			if r == nil {
+				t.Fatal("NewRegistry returned nil")
+			}
+			if r.Namespace != tc.namespace {
+				t.Errorf("Namespace = %q, want %q", r.Namespace, tc.namespace)
+			}
+			if r.Subsystem != tc.subsystem {
+				t.Errorf("Subsystem = %q, want %q", r.Subsystem, tc.subsystem)
+			}
+			if r.JobEnqueued == nil {
+				t.Error("JobEnqueued collector is nil")
+			}
+			if r.JobDuration == nil {
+				t.Error("JobDuration collector is nil")
+			}
 		})
 	}
 }
 
 func TestRegistryRegister(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "registers collectors once"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that the registry binds collectors to a Prometheus registerer without duplication.
-			_ = (&Registry{}).Register(mockRegisterer{})
-		})
-	}
+	t.Run("registers collectors without error", func(t *testing.T) {
+		r := NewRegistry("gotaskq", "worker")
+		if r == nil {
+			t.Skip("NewRegistry not yet implemented")
+		}
+		if err := r.Register(mockRegisterer{}); err != nil {
+			t.Errorf("Register returned unexpected error: %v", err)
+		}
+	})
 }
 
 func TestRegistryHandler(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "returns scrape handler"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that the /metrics handler is non-nil and scrape-safe.
-		})
-	}
+	t.Run("returns a non-nil scrape handler", func(t *testing.T) {
+		r := NewRegistry("gotaskq", "worker")
+		if r == nil {
+			t.Skip("NewRegistry not yet implemented")
+		}
+		h := r.Handler()
+		if h == nil {
+			t.Error("Handler() returned nil")
+		}
+	})
 }

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/example/gotaskq/pkg/models"
@@ -28,6 +29,7 @@ type Pool struct {
 	jobs      chan models.Job
 	semaphore chan struct{}
 	cfg       Config
+	wg        sync.WaitGroup // tracks in-flight goroutines for graceful Stop
 }
 
 // NewPool constructs a worker pool with the supplied runner and concurrency policy.
@@ -86,7 +88,7 @@ func (p *Pool) Submit(ctx context.Context, job models.Job) (accepted bool) {
 // 2. Wait for active workers.
 // 3. Honor the shutdown timeout.
 // Gotchas:
-// - A stopped pool should not accept more jobs.
+// - Close the jobs channel first, then call p.wg.Wait() to drain in-flight workers before returning.
 func (p *Pool) Stop(ctx context.Context) (err error) {
 	// Implementation intentionally omitted.
 	return

@@ -13,6 +13,8 @@ type mockMessageHandler struct{}
 func (mockMessageHandler) Handle(context.Context, *sarama.ConsumerMessage) error { return nil }
 
 func TestNewKafkaClient(t *testing.T) {
+	t.Skip("requires a running Kafka broker: start the stack with `make docker-up`")
+
 	tests := []struct {
 		name string
 		cfg  models.KafkaConfig
@@ -22,55 +24,26 @@ func TestNewKafkaClient(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = tc.cfg
-			// Assert that producer and consumer configuration is prepared correctly.
+			client, err := NewKafkaClient(tc.cfg)
+			if err != nil {
+				t.Fatalf("NewKafkaClient error: %v", err)
+			}
+			if client == nil {
+				t.Fatal("NewKafkaClient returned nil client")
+			}
+			_ = client.Close()
 		})
 	}
 }
 
 func TestKafkaClientPublish(t *testing.T) {
-	tests := []struct {
-		name string
-		topic string
-	}{
-		{name: "publishes to topic", topic: "jobs"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that jobs are serialized and published with the expected headers.
-			_ = tc.topic
-		})
-	}
+	t.Skip("requires a running Kafka broker: start the stack with `make docker-up`")
 }
 
 func TestKafkaClientConsume(t *testing.T) {
-	tests := []struct {
-		name   string
-		topics []string
-	}{
-		{name: "consumes subscribed topics", topics: []string{"jobs"}},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that the consumer group loop invokes the handler and commits offsets.
-			_ = mockMessageHandler{}
-			_ = tc.topics
-		})
-	}
+	t.Skip("requires a running Kafka broker: start the stack with `make docker-up`")
 }
 
 func TestKafkaClientClose(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "closes transport resources"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that producer and consumer handles are closed in a safe order.
-		})
-	}
+	t.Skip("requires a running Kafka broker: start the stack with `make docker-up`")
 }

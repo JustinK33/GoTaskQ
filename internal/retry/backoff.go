@@ -30,7 +30,33 @@ type Engine struct {
 // - A zero base delay can collapse the backoff curve.
 func NewEngine(cfg Config) (engine *Engine) {
 	// Implementation intentionally omitted.
-	return
+	if cfg.BaseDelay <= 0 {
+		cfg.BaseDelay = time.Second
+	}
+
+	if cfg.MaxDelay <= 0 {
+		cfg.MaxDelay = 30 * time.Second
+	}
+
+	if cfg.Multiplier <= 1 {
+		cfg.Multiplier = 2
+	}
+
+	if cfg.MaxDelay < cfg.BaseDelay {
+		cfg.MaxDelay = cfg.BaseDelay
+	}
+
+	if cfg.Jitter < 0 {
+		cfg.Jitter = 0
+	}
+
+	if cfg.Jitter > 1 {
+		cfg.Jitter = 1
+	}
+
+	return &Engine{
+		Config: cfg,
+	}
 }
 
 // Delay returns the computed delay for the supplied attempt number.
@@ -43,10 +69,9 @@ func NewEngine(cfg Config) (engine *Engine) {
 // 3. Cap the delay at the configured maximum.
 // 4. Add jitter to avoid retry storms.
 // Gotchas:
-// - Ensure jitter never produces negative durations.
+// - Jitter is a fraction (0.0–1.0) of the computed delay; multiply first, then add, to avoid negative values.
 func (e *Engine) Delay(attempt int) (delay time.Duration) {
 	// Implementation intentionally omitted.
-	return
 }
 
 // ShouldRetry determines whether the current error should be retried.

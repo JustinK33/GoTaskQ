@@ -24,17 +24,16 @@ type Registry struct {
 	HTTPRequests   *prometheus.CounterVec
 }
 
-// NewRegistry constructs the collector bundle for the configured namespace.
+// NewRegistry constructs the collector bundle for the configured namespace and subsystem.
 // Inputs and outputs:
-// - namespace scopes the exported metric names.
+// - namespace and subsystem are prepended to all metric names (e.g. "gotaskq_worker_jobs_total").
 // - returns the registry wrapper used by handlers, workers, and bootstrap code.
 // Key implementation steps:
-// 1. Define counters, gauges, and histograms.
-// 2. Apply consistent namespace/subsystem labels.
-// 3. Return the registry wrapper for deferred registration.
+// 1. Define counters, gauges, and histograms using namespace and subsystem.
+// 2. Return the registry wrapper for deferred registration.
 // Gotchas:
-// - Avoid double-registering collectors in tests or during hot reload flows.
-func NewRegistry(namespace string) (registry *Registry) {
+// - Avoid double-registering collectors in tests; use a fresh prometheus.NewRegistry() per test.
+func NewRegistry(namespace, subsystem string) (registry *Registry) {
 	// Implementation intentionally omitted.
 	return
 }

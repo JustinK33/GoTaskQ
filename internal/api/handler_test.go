@@ -1,7 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/example/gotaskq/internal/store"
@@ -10,88 +14,192 @@ import (
 	"github.com/rs/zerolog"
 )
 
-type mockQueue struct{}
+func init() {
+	gin.SetMode(gin.TestMode)
+}
 
-func (mockQueue) Enqueue(context.Context, models.Job) (string, error) { return "job-1", nil }
-func (mockQueue) Cancel(context.Context, string) error                { return nil }
+// mockQueue satisfies api.Queue with controllable responses.
+type mockQueue struct {
+	enqueueID  string
+	enqueueErr error
+	cancelErr  error
+}
 
-type mockStore struct{}
+func (m mockQueue) Enqueue(context.Context, models.Job) (string, error) {
+	return m.enqueueID, m.enqueueErr
+}
+func (m mockQueue) Cancel(context.Context, string) error { return m.cancelErr }
 
-func (mockStore) CreateJob(context.Context, models.Job) error         { return nil }
-func (mockStore) UpdateJob(context.Context, models.Job) error         { return nil }
-func (mockStore) GetJob(context.Context, string) (models.Job, error)   { return models.Job{}, nil }
-func (mockStore) CancelJob(context.Context, string) error              { return nil }
-func (mockStore) ClaimNextJob(context.Context) (models.Job, error)     { return models.Job{}, nil }
+// mockStore satisfies store.JobStore with controllable responses.
+type mockStore struct {
+	job    models.Job
+	getErr error
+}
+
+func (m mockStore) CreateJob(context.Context, models.Job) error        { return nil }
+func (m mockStore) UpdateJob(context.Context, models.Job) error        { return nil }
+func (m mockStore) GetJob(_ context.Context, _ string) (models.Job, error) {
+	return m.job, m.getErr
+}
+func (m mockStore) CancelJob(context.Context, string) error           { return nil }
+func (m mockStore) ClaimNextJob(context.Context) (models.Job, error)  { return models.Job{}, nil }
 
 func TestNewHandler(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "wires queue and store"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that the handler stores its dependencies and exposes a usable route bundle.
-			_ = NewHandler(mockQueue{}, mockStore{}, zerolog.Logger{})
-		})
-	}
+	t.Run("wires queue and store dependencies", func(t *testing.T) {
+		q := mockQueue{enqueueID: "job-1"}
+		s := mockStore{}
+		h := NewHandler(q, s, zerolog.Logger{})
+		if h == nil {
+			t.Fatal("NewHandler returned nil")
+		}
+		if h.Queue == nil {
+			t.Error("Handler.Queue is nil")
+		}
+		if h.Store == nil {
+			t.Error("Handler.Store is nil")
+		}
+	})
 }
 
 func TestHandlerRegisterRoutes(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "mounts route set"},
-	}
+	t.Run("mounts enqueue, status, and cancel routes", func(t *testing.T) {
+		h := NewHandler(mockQueue{enqueueID: "job-1"}, mockStore{}, zerolog.Logger{})
+		if h == nil {
+			t.Skip("NewHandler not yet implemented")
+		}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assert that enqueue, status, and cancel routes are registered on the provided router.
-			_ = gin.New()
-			_ = store.JobStore(mockStore{})
-		})
-	}
+		router := gin.New()
+		h.RegisterRoutes(router)
+
+		// Verify POST /api/jobs is registered (not 404 or 405).
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs", bytes.NewBufferString(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+
+		if w.Code == http.StatusNotFound {
+			t.Error("POST /api/jobs returned 404: route was not registered")
+		}
+	})
 }
 
 func TestEnqueueJob(t *testing.T) {
 	tests := []struct {
-		name string
+		name       string
+		body       string
+		queue      mockQueue
+		wantStatus int
 	}{
-		{name: "accepts enqueue request"},
+		{
+			name:       "valid request returns created status",
+			body:       `{"id":"job-1","task":{"name":"send-email","queue":"default"}}`,
+			queue:      mockQueue{enqueueID: "job-1"},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "invalid JSON returns bad request",
+			body:       `not json`,
+			queue:      mockQueue{},
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Assert that valid job creation requests are bound, validated, and forwarded to the queue.
+			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{})
+			if h == nil {
+				t.Skip("NewHandler not yet implemented")
+			}
+			router := gin.New()
+			h.RegisterRoutes(router)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/jobs", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
+			}
 		})
 	}
 }
 
 func TestGetJobStatus(t *testing.T) {
 	tests := []struct {
-		name string
+		name       string
+		jobID      string
+		store      mockStore
+		wantStatus int
 	}{
-		{name: "returns job status"},
+		{
+			name:       "found job returns 200",
+			jobID:      "job-1",
+			store:      mockStore{job: models.Job{ID: "job-1", State: models.JobStatePending}},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "missing job returns 404",
+			jobID:      "missing",
+			store:      mockStore{getErr: store.ErrJobNotFound},
+			wantStatus: http.StatusNotFound,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Assert that durable job status is returned or a clean not-found response is produced.
+			h := NewHandler(mockQueue{}, tc.store, zerolog.Logger{})
+			if h == nil {
+				t.Skip("NewHandler not yet implemented")
+			}
+			router := gin.New()
+			h.RegisterRoutes(router)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/jobs/"+tc.jobID, nil)
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
+			}
 		})
 	}
 }
 
 func TestCancelJob(t *testing.T) {
 	tests := []struct {
-		name string
+		name       string
+		jobID      string
+		queue      mockQueue
+		wantStatus int
 	}{
-		{name: "cancels job request"},
+		{
+			name:       "successful cancellation returns 200",
+			jobID:      "job-1",
+			queue:      mockQueue{},
+			wantStatus: http.StatusOK,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Assert that cancellation is routed to the queue or store and terminal states are handled.
+			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{})
+			if h == nil {
+				t.Skip("NewHandler not yet implemented")
+			}
+			router := gin.New()
+			h.RegisterRoutes(router)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+tc.jobID+"/cancel", nil)
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
+			}
 		})
 	}
 }
+
+// helper used to suppress unused import error before implementation is done
+var _ = json.Marshal

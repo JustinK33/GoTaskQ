@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/example/gotaskq/pkg/models"
@@ -35,6 +36,9 @@ type Scheduler struct {
 	tickInterval   time.Duration
 	running        bool
 	maxConcurrency int
+	mu             sync.Mutex         // guards entries and the running flag
+	wg             sync.WaitGroup     // tracks dispatched job goroutines
+	cancel         context.CancelFunc // stored by Start, called by Stop
 }
 
 // New constructs a scheduler with the supplied tick interval.
@@ -61,7 +65,7 @@ func New(tickInterval time.Duration) (scheduler *Scheduler) {
 // 2. Store the entry by name.
 // 3. Prepare it for the next tick.
 // Gotchas:
-// - Duplicate names should be handled deterministically.
+// - Registering an entry with an existing name should replace it; use s.mu to guard the map write.
 func (s *Scheduler) Register(entry Entry) (err error) {
 	// Implementation intentionally omitted.
 	return
@@ -82,16 +86,16 @@ func (s *Scheduler) Start(ctx context.Context) {
 	// Implementation intentionally omitted.
 }
 
-// Stop halts the scheduler loop and releases any internal timers.
+// Stop halts the scheduler loop and waits for any dispatched jobs to finish.
 // Inputs and outputs:
 // - none: the scheduler stops its own orchestration.
 // - returns nothing.
 // Key implementation steps:
-// 1. Mark the scheduler as stopped.
-// 2. Release timer resources.
-// 3. Prevent future dispatches.
+// 1. Call s.cancel() to signal the ticker loop to exit.
+// 2. Call s.wg.Wait() to drain any running job goroutines.
+// 3. Mark running as false.
 // Gotchas:
-// - Stop should be safe to call more than once.
+// - Stop should be safe to call more than once; guard s.cancel with s.mu.
 func (s *Scheduler) Stop() {
 	// Implementation intentionally omitted.
 }

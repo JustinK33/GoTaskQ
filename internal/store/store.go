@@ -34,10 +34,13 @@ type PostgresStore struct {
 // 2. Record the target table name.
 // 3. Return the wrapper for later CRUD operations.
 // Gotchas:
-// - Queries should always target the same state machine columns.
+// - A nil pool is valid here for unit tests; do not dereference until methods are called.
 func NewPostgresStore(pool *pgxpool.Pool, tableName string) (store *PostgresStore) {
 	// Implementation intentionally omitted.
-	return
+	return &PostgresStore{
+		Pool:      pool,
+		TableName: tableName,
+	}
 }
 
 // CreateJob persists a new job record.
@@ -66,6 +69,7 @@ func (s *PostgresStore) CreateJob(ctx context.Context, job models.Job) (err erro
 // 2. Persist the updated columns.
 // 3. Ensure the row still exists.
 // Gotchas:
+// - Return ErrInvalidTransition when CanTransition rejects the new state.
 // - Lost updates are a concern without row versioning or compare-and-swap semantics.
 func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) (err error) {
 	// Implementation intentionally omitted.
@@ -82,7 +86,7 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) (err erro
 // 2. Map columns into the shared model.
 // 3. Return a not-found error when no record exists.
 // Gotchas:
-// - The state machine should preserve timestamps exactly as stored.
+// - Return ErrJobNotFound (not a generic error) when no row matches the id.
 func (s *PostgresStore) GetJob(ctx context.Context, id string) (job models.Job, err error) {
 	// Implementation intentionally omitted.
 	return
@@ -120,17 +124,40 @@ func (s *PostgresStore) ClaimNextJob(ctx context.Context) (job models.Job, err e
 }
 
 // CanTransition reports whether a job can move from one state to another.
+//
+// Valid transitions:
+//
+//	PENDING  → RUNNING
+//	RUNNING  → COMPLETED | FAILED | DEAD
+//	FAILED   → PENDING  (retry re-enqueue)
+//	Any      → DEAD     (dead-letter escalation)
+//
 // Inputs and outputs:
 // - from is the current state.
 // - to is the target state.
 // - returns true when the transition is allowed.
 // Key implementation steps:
-// 1. Check terminal states.
-// 2. Enforce the allowed lifecycle transitions.
+// 1. Reject transitions out of COMPLETED and DEAD (terminal states).
+// 2. Apply the allowed lifecycle rules above.
 // 3. Return the transition decision.
 // Gotchas:
-// - Dead-letter flows may permit transitions that normal completion does not.
+// - COMPLETED is terminal; no further transitions are allowed from it.
 func CanTransition(from, to models.JobState) (allowed bool) {
 	// Implementation intentionally omitted.
-	return
+	if from == models.JobStateCompleted || from == models.JobStateDead {
+		return false
+	}
+
+	switch from {
+	case models.JobStatePending:
+		return to == models.JobStateRunning || to == models.JobStateDead
+
+	case models.JobStateRunning:
+		return to == models.JobStateCompleted || to == models.JobStateFailed || to == models.JobStateDead
+	case models.JobStateFailed:
+		return to == models.JobStatePending || to == models.JobStateDead
+
+	default:
+		return false
+	}
 }

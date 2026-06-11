@@ -9,8 +9,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Queue defines the enqueue and cancellation operations used by the HTTP API.
-// Keeping the interface narrow lets the API layer stay transport-focused.
+// Queue is the business-level adapter over the transport layer.
+// KafkaClient (queue package) implements Producer/Consumer but does NOT satisfy this interface.
+// You will need to create a service type that wraps KafkaClient and PostgresStore to implement:
+//   - Enqueue: publish the job to Kafka AND persist it in the store, returning the job ID.
+//   - Cancel: apply the cancel transition in the store (and optionally signal the worker).
 type Queue interface {
 	Enqueue(context.Context, models.Job) (string, error)
 	Cancel(context.Context, string) error

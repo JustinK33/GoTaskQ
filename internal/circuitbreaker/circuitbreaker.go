@@ -1,6 +1,9 @@
 package circuitbreaker
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // State represents the current circuit breaker state.
 // The state machine mirrors the classic closed/open/half-open pattern.
@@ -24,6 +27,7 @@ type Config struct {
 // Breaker holds the mutable state for the circuit breaker state machine.
 // It is intentionally small so the worker and queue layers can depend on it without extra coupling.
 type Breaker struct {
+	mu        sync.Mutex // guards all field reads and writes
 	cfg       Config
 	state     State
 	failures  int
@@ -55,7 +59,7 @@ func New(cfg Config) (breaker *Breaker) {
 // 2. Move from open to half-open when the timeout elapses.
 // 3. Decide whether the protected call may continue.
 // Gotchas:
-// - State transitions must be concurrency-safe in the real implementation.
+// - Lock b.mu before reading or writing state, failures, or openedAt.
 func (b *Breaker) Allow() (allowed bool) {
 	// Implementation intentionally omitted.
 	return
