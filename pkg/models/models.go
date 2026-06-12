@@ -56,12 +56,16 @@ type HTTPConfig struct {
 // KafkaConfig describes the queue transport topology.
 // The consumer group and dead-letter topic are included so retries and failures can be routed explicitly.
 type KafkaConfig struct {
-	Brokers         []string
-	Topic           string
-	ConsumerGroup   string
-	DeadLetterTopic string
-	ClientID        string
-	RequiredAcks    int16
+	Brokers           []string
+	Topic             string
+	ConsumerGroup     string
+	DeadLetterTopic   string
+	ClientID          string
+	RequiredAcks      int16
+	CompressionCodec  int           // 0=none 1=gzip 2=snappy 3=lz4 4=zstd
+	FlushFrequencyMs  int           // producer flush interval in milliseconds
+	FlushBytes        int           // producer flush threshold in bytes
+	ChannelBufferSize int           // sarama internal channel buffer depth
 }
 
 // RedisConfig configures the distributed locking and coordination layer.
@@ -77,10 +81,13 @@ type RedisConfig struct {
 // PostgresConfig configures the durable job state store.
 // The DSN and pool settings are consumed by the store package.
 type PostgresConfig struct {
-	DSN            string
-	MaxConns       int32
-	MinConns       int32
-	MigrationsPath string
+	DSN               string
+	MaxConns          int32
+	MinConns          int32
+	MigrationsPath    string
+	MaxConnLifetime   time.Duration
+	MaxConnIdleTime   time.Duration
+	HealthCheckPeriod time.Duration
 }
 
 // WorkerConfig controls the goroutine pool and shutdown behavior.

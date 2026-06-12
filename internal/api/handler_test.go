@@ -8,11 +8,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/example/gotaskq/internal/metrics"
 	"github.com/example/gotaskq/internal/store"
 	"github.com/example/gotaskq/pkg/models"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 )
+
+// testRegistry returns a fresh metrics registry on an isolated Prometheus registry
+// so parallel tests don't conflict on duplicate metric registration.
+func testRegistry() *metrics.Registry {
+	reg := metrics.NewRegistry("test", "api")
+	_ = reg.Register(prometheus.NewRegistry())
+	return reg
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)
@@ -48,7 +58,7 @@ func TestNewHandler(t *testing.T) {
 	t.Run("wires queue and store dependencies", func(t *testing.T) {
 		q := mockQueue{enqueueID: "job-1"}
 		s := mockStore{}
-		h := NewHandler(q, s, zerolog.Logger{})
+		h := NewHandler(q, s, zerolog.Logger{}, testRegistry())
 		if h == nil {
 			t.Fatal("NewHandler returned nil")
 		}
@@ -63,7 +73,7 @@ func TestNewHandler(t *testing.T) {
 
 func TestHandlerRegisterRoutes(t *testing.T) {
 	t.Run("mounts enqueue, status, and cancel routes", func(t *testing.T) {
-		h := NewHandler(mockQueue{enqueueID: "job-1"}, mockStore{}, zerolog.Logger{})
+		h := NewHandler(mockQueue{enqueueID: "job-1"}, mockStore{}, zerolog.Logger{}, testRegistry())
 		if h == nil {
 			t.Skip("NewHandler not yet implemented")
 		}
@@ -106,7 +116,7 @@ func TestEnqueueJob(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{})
+			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{}, testRegistry())
 			if h == nil {
 				t.Skip("NewHandler not yet implemented")
 			}
@@ -148,7 +158,7 @@ func TestGetJobStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(mockQueue{}, tc.store, zerolog.Logger{})
+			h := NewHandler(mockQueue{}, tc.store, zerolog.Logger{}, testRegistry())
 			if h == nil {
 				t.Skip("NewHandler not yet implemented")
 			}
@@ -183,7 +193,7 @@ func TestCancelJob(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{})
+			h := NewHandler(tc.queue, mockStore{}, zerolog.Logger{}, testRegistry())
 			if h == nil {
 				t.Skip("NewHandler not yet implemented")
 			}

@@ -10,11 +10,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
           cache: true
@@ -22,14 +20,90 @@ jobs:
       - name: Download modules
         run: go mod download
 
-      - name: Run tests
-        run: go test ./...
-
-      - name: Run vet
+      - name: Vet
         run: go vet ./...
 
-      - name: Start smoke server for k6
-        run: nohup python -m http.server 8080 --bind 127.0.0.1 >/tmp/gotaskq-smoke.log 2>&1 &
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Race detector
+        run: go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Compile
+        run: go build -o bin/server ./cmd/server
+
+      - name: Docker build
+        run: docker build -t gotaskq:${{ github.sha }} .
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-binary
+          path: bin/server
+
+  load-test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: server-binary
+          path: bin/
+
+      - name: Make binary executable
+        run: chmod +x bin/server
+
+      - name: Start infrastructure
+        run: |
+          docker compose up -d kafka redis redis-2 redis-3 postgres
+          echo "Waiting for Postgres..."
+          until docker exec gotaskq-postgres-1 pg_isready -U gotaskq 2>/dev/null; do sleep 2; done
+          docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
+
+      - name: Start server
+        env:
+          POSTGRES_DSN: postgres://gotaskq:gotaskq@localhost:5433/gotaskq?sslmode=disable
+          KAFKA_BROKERS: localhost:9092
+          KAFKA_TOPIC: jobs
+          REDIS_ADDRESSES: localhost:6379,localhost:6380,localhost:6381
+          WORKER_CONCURRENCY: "50"
+          WORKER_QUEUE_SIZE: "500"
+          KAFKA_COMPRESSION_CODEC: "2"
+          KAFKA_FLUSH_FREQUENCY_MS: "5"
+          KAFKA_FLUSH_BYTES: "1048576"
+          KAFKA_CHANNEL_BUFFER_SIZE: "256"
+          POSTGRES_MAX_CONNS: "50"
+          POSTGRES_MIN_CONNS: "10"
+          HTTP_ADDRESS: ":8080"
+        run: |
+          nohup bin/server > /tmp/server.log 2>&1 &
+          echo "Waiting for server..."
+          until curl -sf http://localhost:8080/health; do sleep 1; done
 
       - name: Run k6 load test
         uses: grafana/k6-action@v0.3.1
@@ -37,3 +111,7 @@ jobs:
           filename: loadtest/k6.js
         env:
           BASE_URL: http://127.0.0.1:8080
+
+      - name: Server logs (on failure)
+        if: failure()
+        run: cat /tmp/server.log
