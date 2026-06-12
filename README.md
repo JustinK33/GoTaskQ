@@ -2,6 +2,10 @@
 
 [![ci](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml) [![cd](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml)
 
+<p align="center">
+  <img src="ARCHITECTURE.png" alt="Architecture Diagram" width="800"/>
+</p>
+
 GoTaskQ is a production-oriented distributed task queue scaffold written in Go.
 It is organized around Kafka for transport, PostgreSQL for durable job state, Redis for distributed locks, Gin for HTTP, Prometheus for metrics, and zerolog for structured logging.
 
