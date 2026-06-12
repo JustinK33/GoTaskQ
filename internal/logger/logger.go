@@ -1,9 +1,15 @@
 package logger
 
-import "github.com/rs/zerolog"
+import (
+	"fmt"
+	"io"
+	"os"
+	"time"
+
+	"github.com/rs/zerolog"
+)
 
 // Config captures zerolog setup options for the application.
-// The logger package keeps configuration separate so main can stay focused on wiring.
 type Config struct {
 	Level       string
 	Format      string
@@ -14,47 +20,39 @@ type Config struct {
 }
 
 // New builds the service logger using the supplied configuration.
-// Inputs and outputs:
-// - cfg controls log level, format, and metadata.
-// - returns the configured logger and any initialization error.
-// Key implementation steps:
-// 1. Parse the requested log level.
-// 2. Configure time encoding and output formatting.
-// 3. Attach service metadata.
-// 4. Return a ready-to-use zerolog.Logger.
-// Gotchas:
-// - Keep JSON and pretty output behaviors consistent across environments.
-func New(cfg Config) (log zerolog.Logger, err error) {
-	// Implementation intentionally omitted.
-	return
+func New(cfg Config) (zerolog.Logger, error) {
+	level, err := zerolog.ParseLevel(cfg.Level)
+	if err != nil {
+		return zerolog.Logger{}, fmt.Errorf("logger: invalid level %q: %w", cfg.Level, err)
+	}
+
+	var output io.Writer
+	if cfg.Pretty {
+		output = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	} else {
+		output = os.Stdout
+	}
+
+	ctx := zerolog.New(output).
+		Level(level).
+		With().
+		Timestamp().
+		Str("service", cfg.ServiceName).
+		Str("env", cfg.Environment)
+
+	if cfg.AddCaller {
+		ctx = ctx.Caller()
+	}
+
+	return ctx.Logger(), nil
 }
 
-// ConfigureGlobal installs the logger as the process-wide default logger.
-// Inputs and outputs:
-// - log is the configured zerolog logger to expose globally.
-// - returns nothing.
-// Key implementation steps:
-// 1. Set the global zerolog default.
-// 2. Apply any project-wide field normalization.
-// 3. Keep the configuration deterministic for tests.
-// Gotchas:
-// - Global state should be set once during bootstrap only.
+// ConfigureGlobal installs the logger as the process-wide default.
 func ConfigureGlobal(log zerolog.Logger) {
-	// Implementation intentionally omitted.
+	zerolog.DefaultContextLogger = &log
 }
 
-// WithComponent returns a logger scoped to a subsystem or package name.
-// Inputs and outputs:
-// - log is the parent structured logger.
-// - component names the subsystem being traced.
-// - returns a child logger with the component field attached.
-// Key implementation steps:
-// 1. Add subsystem metadata.
-// 2. Preserve the parent's output destination.
-// 3. Return the child logger for downstream use.
-// Gotchas:
-// - Keep component names stable so dashboards remain searchable.
-func WithComponent(log zerolog.Logger, component string) (child zerolog.Logger) {
-	// Implementation intentionally omitted.
-	return
+// WithComponent returns a logger scoped to a named subsystem.
+func WithComponent(log zerolog.Logger, component string) zerolog.Logger {
+	return log.With().Str("component", component).Logger()
 }

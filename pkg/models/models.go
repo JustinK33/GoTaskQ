@@ -56,9 +56,11 @@ type HTTPConfig struct {
 // KafkaConfig describes the queue transport topology.
 // The consumer group and dead-letter topic are included so retries and failures can be routed explicitly.
 type KafkaConfig struct {
-	Brokers           []string
-	Topic             string
-	ConsumerGroup     string
+	Brokers       []string
+	Topic         string
+	ConsumerGroup string
+	// DeadLetterTopic is wired in config but not yet consumed — failed messages
+	// are currently logged and dropped rather than re-routed.
 	DeadLetterTopic   string
 	ClientID          string
 	RequiredAcks      int16

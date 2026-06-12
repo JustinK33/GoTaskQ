@@ -2,23 +2,25 @@ package lock
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 // Config describes the quorum and retry behavior for distributed locking.
-// It models the Redlock timing and retry policy used by the worker and scheduler layers.
 type Config struct {
-	Quorum     int
-	TTL        time.Duration
-	RetryCount int
-	RetryDelay time.Duration
+	Quorum      int
+	TTL         time.Duration
+	RetryCount  int
+	RetryDelay  time.Duration
 	DriftFactor float64
 }
 
 // Lock captures a distributed lock lease.
-// The resource and value pair are needed to validate ownership on release.
 type Lock struct {
 	Resource string
 	Value    string
@@ -26,57 +28,107 @@ type Lock struct {
 }
 
 // Manager coordinates lock acquisition across multiple Redis clients.
-// The implementation is expected to enforce quorum semantics across the configured nodes.
 type Manager struct {
 	clients []redis.UniversalClient
 	cfg     Config
 }
 
-// NewManager constructs a lock manager over the provided Redis clients.
-// Inputs and outputs:
-// - clients is the Redis pool used to acquire quorum locks.
-// - cfg tunes timeouts and retry behavior.
-// - returns the initialized manager.
-// Key implementation steps:
-// 1. Validate the number of clients against quorum.
-// 2. Capture the timing policy.
-// 3. Return the manager for later acquisition and release.
-// Gotchas:
-// - Quorum calculations must stay correct even when one Redis node is unavailable.
-func NewManager(clients []redis.UniversalClient, cfg Config) (manager *Manager) {
-	// Implementation intentionally omitted.
-	return
+// NewManager constructs a lock manager with sensible defaults for unset fields.
+func NewManager(clients []redis.UniversalClient, cfg Config) *Manager {
+	if cfg.Quorum <= 0 {
+		cfg.Quorum = len(clients)/2 + 1
+	}
+	if cfg.TTL <= 0 {
+		cfg.TTL = 10 * time.Second
+	}
+	if cfg.RetryCount <= 0 {
+		cfg.RetryCount = 3
+	}
+	if cfg.RetryDelay <= 0 {
+		cfg.RetryDelay = 200 * time.Millisecond
+	}
+	if cfg.DriftFactor <= 0 {
+		cfg.DriftFactor = 0.01
+	}
+	return &Manager{clients: clients, cfg: cfg}
 }
 
-// Acquire attempts to claim a distributed lock for the named resource.
-// Inputs and outputs:
-// - ctx controls cancellation and deadlines.
-// - resource identifies the logical lock.
-// - returns the acquired lock and any error.
-// Key implementation steps:
-// 1. Generate a unique lock value.
-// 2. Attempt the lock across the Redis quorum.
-// 3. Verify elapsed time and drift constraints.
-// 4. Return the lease when quorum succeeds.
-// Gotchas:
-// - Partial quorum wins must be released if the operation ultimately fails.
-func (m *Manager) Acquire(ctx context.Context, resource string) (lock Lock, err error) {
-	// Implementation intentionally omitted.
-	return
+// Acquire attempts to claim a distributed lock for the named resource using the Redlock algorithm.
+func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
+	value, err := generateToken()
+	if err != nil {
+		return Lock{}, fmt.Errorf("lock: generate token: %w", err)
+	}
+
+	for attempt := 0; attempt < m.cfg.RetryCount; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return Lock{}, ctx.Err()
+			case <-time.After(m.cfg.RetryDelay):
+			}
+		}
+
+		start := time.Now()
+		acquired := 0
+
+		for _, client := range m.clients {
+			ok, setErr := client.SetNX(ctx, resource, value, m.cfg.TTL).Result()
+			if setErr == nil && ok {
+				acquired++
+			}
+		}
+
+		elapsed := time.Since(start)
+		drift := time.Duration(float64(m.cfg.TTL)*m.cfg.DriftFactor) + 2*time.Millisecond
+		validity := m.cfg.TTL - elapsed - drift
+
+		if acquired >= m.cfg.Quorum && validity > 0 {
+			return Lock{
+				Resource: resource,
+				Value:    value,
+				Expiry:   time.Now().Add(validity),
+			}, nil
+		}
+
+		// Partial win — release all acquired locks before retrying.
+		for _, client := range m.clients {
+			releaseSingle(ctx, client, resource, value)
+		}
+	}
+
+	return Lock{}, fmt.Errorf("lock: could not acquire lock on %s after %d attempts", resource, m.cfg.RetryCount)
 }
 
-// Release relinquishes a previously acquired distributed lock.
-// Inputs and outputs:
-// - ctx controls cancellation and deadlines.
-// - lock describes the lease being released.
-// - returns an error when ownership cannot be confirmed.
-// Key implementation steps:
-// 1. Validate the resource/value pair.
-// 2. Release the lock on the quorum nodes.
-// 3. Report any partial release failures.
-// Gotchas:
-// - Releasing a lock with a stale value should not affect another owner's lease.
-func (m *Manager) Release(ctx context.Context, lock Lock) (err error) {
-	// Implementation intentionally omitted.
-	return
+// releaseScript atomically deletes the key only when the value matches the caller's token.
+var releaseScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+else
+	return 0
+end
+`)
+
+func releaseSingle(ctx context.Context, client redis.UniversalClient, resource, value string) {
+	releaseScript.Run(ctx, client, []string{resource}, value)
+}
+
+// Release relinquishes the distributed lock on all quorum nodes.
+func (m *Manager) Release(ctx context.Context, lock Lock) error {
+	var errs []error
+	for _, client := range m.clients {
+		err := releaseScript.Run(ctx, client, []string{lock.Resource}, lock.Value).Err()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func generateToken() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

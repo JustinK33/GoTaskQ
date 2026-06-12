@@ -6,7 +6,6 @@ import (
 )
 
 // State represents the current circuit breaker state.
-// The state machine mirrors the classic closed/open/half-open pattern.
 type State string
 
 const (
@@ -16,7 +15,6 @@ const (
 )
 
 // Config defines the thresholds and timeout windows for the circuit breaker.
-// The values control how quickly the breaker trips and how cautiously it recovers.
 type Config struct {
 	FailureThreshold int
 	SuccessThreshold int
@@ -25,9 +23,8 @@ type Config struct {
 }
 
 // Breaker holds the mutable state for the circuit breaker state machine.
-// It is intentionally small so the worker and queue layers can depend on it without extra coupling.
 type Breaker struct {
-	mu        sync.Mutex // guards all field reads and writes
+	mu        sync.Mutex
 	cfg       Config
 	state     State
 	failures  int
@@ -35,74 +32,86 @@ type Breaker struct {
 	openedAt  time.Time
 }
 
-// New constructs a circuit breaker using the supplied configuration.
-// Inputs and outputs:
-// - cfg defines thresholds, success gates, and reset timing.
-// - returns the initialized breaker.
-// Key implementation steps:
-// 1. Normalize thresholds.
-// 2. Initialize the breaker in the closed state.
-// 3. Return the ready-to-use state machine.
-// Gotchas:
-// - Half-open capacity should be bounded carefully to avoid immediate re-failures.
-func New(cfg Config) (breaker *Breaker) {
-	// Implementation intentionally omitted.
-	return
+// New constructs a circuit breaker initialised in the closed state.
+func New(cfg Config) *Breaker {
+	if cfg.FailureThreshold <= 0 {
+		cfg.FailureThreshold = 5
+	}
+	if cfg.SuccessThreshold <= 0 {
+		cfg.SuccessThreshold = 2
+	}
+	if cfg.OpenTimeout <= 0 {
+		cfg.OpenTimeout = 60 * time.Second
+	}
+	if cfg.HalfOpenRequests <= 0 {
+		cfg.HalfOpenRequests = 1
+	}
+	return &Breaker{cfg: cfg, state: StateClosed}
 }
 
-// Allow reports whether the current call is allowed to proceed.
-// Inputs and outputs:
-// - none: the decision is based on the breaker state and timing.
-// - returns true when the protected action may run.
-// Key implementation steps:
-// 1. Inspect the current state.
-// 2. Move from open to half-open when the timeout elapses.
-// 3. Decide whether the protected call may continue.
-// Gotchas:
-// - Lock b.mu before reading or writing state, failures, or openedAt.
-func (b *Breaker) Allow() (allowed bool) {
-	// Implementation intentionally omitted.
-	return
+// Allow reports whether the protected call may proceed.
+func (b *Breaker) Allow() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case StateClosed:
+		return true
+	case StateOpen:
+		if time.Since(b.openedAt) >= b.cfg.OpenTimeout {
+			b.state = StateHalfOpen
+			b.failures = 0
+			b.successes = 0
+			return true
+		}
+		return false
+	case StateHalfOpen:
+		return b.successes < b.cfg.HalfOpenRequests
+	}
+	return false
 }
 
 // RecordSuccess informs the breaker that a protected call succeeded.
-// Inputs and outputs:
-// - none: the breaker mutates its own success counters.
-// - returns nothing.
-// Key implementation steps:
-// 1. Reset failure counters as needed.
-// 2. Advance half-open progress toward closed.
-// 3. Restore the closed state when recovery criteria are met.
-// Gotchas:
-// - Successes in half-open should be counted conservatively.
 func (b *Breaker) RecordSuccess() {
-	// Implementation intentionally omitted.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case StateHalfOpen:
+		b.successes++
+		if b.successes >= b.cfg.SuccessThreshold {
+			b.state = StateClosed
+			b.failures = 0
+			b.successes = 0
+		}
+	case StateClosed:
+		b.failures = 0
+	}
 }
 
 // RecordFailure informs the breaker that a protected call failed.
-// Inputs and outputs:
-// - none: the breaker mutates its own failure counters.
-// - returns nothing.
-// Key implementation steps:
-// 1. Increase the failure count.
-// 2. Trip the breaker when the threshold is exceeded.
-// 3. Record the time the breaker opened.
-// Gotchas:
-// - A single failure in half-open may need to trip immediately depending on policy.
 func (b *Breaker) RecordFailure() {
-	// Implementation intentionally omitted.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case StateClosed:
+		b.failures++
+		if b.failures >= b.cfg.FailureThreshold {
+			b.state = StateOpen
+			b.openedAt = time.Now()
+		}
+	case StateHalfOpen:
+		b.state = StateOpen
+		b.openedAt = time.Now()
+		b.failures = 0
+		b.successes = 0
+	}
 }
 
 // State returns the current breaker state.
-// Inputs and outputs:
-// - none: the method simply exposes the current state.
-// - returns closed, open, or half-open.
-// Key implementation steps:
-// 1. Read the current state.
-// 2. Return it without mutating the breaker.
-// Gotchas:
-// - Callers should treat the returned value as a snapshot.
-func (b *Breaker) State() (state State) {
-	// Implementation intentionally omitted.
-	return
+func (b *Breaker) State() State {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state
 }

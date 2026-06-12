@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -9,13 +11,11 @@ import (
 )
 
 // JobRunner performs the actual business work for a job.
-// Separating the runner from the pool keeps concurrency orchestration testable.
 type JobRunner interface {
 	Run(context.Context, models.Job) error
 }
 
 // Config controls the goroutine pool and semaphore bounds.
-// The queue size and shutdown timeout let the pool behave predictably during load and shutdown.
 type Config struct {
 	Concurrency     int
 	QueueSize       int
@@ -23,73 +23,82 @@ type Config struct {
 }
 
 // Pool owns the in-process worker lifecycle and concurrency control.
-// It uses a semaphore to bound work in flight while letting callers enqueue jobs safely.
 type Pool struct {
 	Runner    JobRunner
 	jobs      chan models.Job
 	semaphore chan struct{}
 	cfg       Config
-	wg        sync.WaitGroup // tracks in-flight goroutines for graceful Stop
+	wg        sync.WaitGroup
 }
 
-// NewPool constructs a worker pool with the supplied runner and concurrency policy.
-// Inputs and outputs:
-// - cfg defines the queue size, concurrency, and shutdown timing.
-// - runner executes each claimed job.
-// - returns the pool instance.
-// Key implementation steps:
-// 1. Allocate the buffered queue.
-// 2. Allocate the semaphore.
-// 3. Return the pool wrapper.
-// Gotchas:
-// - Concurrency zero should be treated as invalid in the real implementation.
-func NewPool(cfg Config, runner JobRunner) (pool *Pool) {
-	// Implementation intentionally omitted.
-	return
+// NewPool constructs a worker pool with the given runner and concurrency policy.
+func NewPool(cfg Config, runner JobRunner) *Pool {
+	return &Pool{
+		Runner:    runner,
+		jobs:      make(chan models.Job, cfg.QueueSize),
+		semaphore: make(chan struct{}, cfg.Concurrency),
+		cfg:       cfg,
+	}
 }
 
-// Start begins draining the pool's job queue.
-// Inputs and outputs:
-// - ctx controls shutdown and cancellation.
-// - returns nothing; the pool will manage its own goroutines.
-// Key implementation steps:
-// 1. Spawn worker goroutines.
-// 2. Pull jobs from the queue.
-// 3. Bound execution with the semaphore.
-// 4. Stop on context cancellation.
-// Gotchas:
-// - Panic recovery should be considered in the real worker loop.
+// Start begins draining the pool's job queue in the background.
 func (p *Pool) Start(ctx context.Context) {
-	// Implementation intentionally omitted.
+	go func() {
+		for {
+			select {
+			case job, ok := <-p.jobs:
+				if !ok {
+					return
+				}
+				p.semaphore <- struct{}{}
+				p.wg.Add(1)
+				go func(j models.Job) {
+					defer p.wg.Done()
+					defer func() { <-p.semaphore }()
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Fprintf(os.Stderr, "worker: panic in job %s: %v\n", j.ID, r)
+						}
+					}()
+					_ = p.Runner.Run(ctx, j) // runner is responsible for its own error handling
+				}(job)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
-// Submit adds a job to the pool queue if capacity permits.
-// Inputs and outputs:
-// - ctx controls cancellation and enqueue deadlines.
-// - job is the work item to be executed.
-// - returns true when the job was accepted.
-// Key implementation steps:
-// 1. Respect context cancellation.
-// 2. Enqueue the job if buffered capacity remains.
-// 3. Return whether the job entered the queue.
-// Gotchas:
-// - Backpressure should be observable to callers under saturation.
-func (p *Pool) Submit(ctx context.Context, job models.Job) (accepted bool) {
-	// Implementation intentionally omitted.
-	return
+// Submit enqueues a job if context and buffer capacity permit.
+// Returns false immediately when the queue is full or the context is done.
+func (p *Pool) Submit(ctx context.Context, job models.Job) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case p.jobs <- job:
+		return true
+	case <-ctx.Done():
+		return false
+	default:
+		return false
+	}
 }
 
-// Stop shuts down the pool and waits for in-flight work to complete.
-// Inputs and outputs:
-// - ctx controls the stop deadline.
-// - returns an error if shutdown exceeds the deadline.
-// Key implementation steps:
-// 1. Close the job queue.
-// 2. Wait for active workers.
-// 3. Honor the shutdown timeout.
-// Gotchas:
-// - Close the jobs channel first, then call p.wg.Wait() to drain in-flight workers before returning.
-func (p *Pool) Stop(ctx context.Context) (err error) {
-	// Implementation intentionally omitted.
-	return
+// Stop closes the job queue and waits for in-flight work to drain within the deadline.
+func (p *Pool) Stop(ctx context.Context) error {
+	close(p.jobs)
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

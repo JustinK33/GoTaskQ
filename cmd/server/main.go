@@ -115,7 +115,7 @@ func run(ctx context.Context) error {
 	}
 	defer kafkaClient.Close()
 
-	jobSvc := service.NewJobService(kafkaClient, jobStore, cfg.Kafka.Topic)
+	jobSvc := service.NewJobService(kafkaClient, jobStore, cfg.Kafka.Topic, logger.WithComponent(log, "service"))
 
 	breaker := circuitbreaker.New(circuitbreaker.Config{
 		FailureThreshold: 5,
@@ -274,9 +274,9 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 	return nil
 }
 
-// execute dispatches to the task handler registered for job.Task.Name.
-// A production system would maintain a handler registry (map[string]TaskHandler)
-// populated at startup; here the dispatch point is left explicit for extensibility.
+// execute is where task handlers plug in. A real deployment would look up
+// job.Task.Name in a handler registry here; left as a no-op to keep the
+// queue/store/worker machinery decoupled from application logic.
 func (jw *jobWorker) execute(_ context.Context, _ models.Job) error {
 	return nil
 }

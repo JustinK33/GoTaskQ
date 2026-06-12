@@ -10,7 +10,6 @@ import (
 var _ = promhttp.Handler
 
 // Registry groups the Prometheus collectors exposed by GoTaskQ.
-// Keeping the collectors in one place makes registration and testing explicit.
 type Registry struct {
 	Namespace      string
 	Subsystem      string
@@ -24,46 +23,87 @@ type Registry struct {
 	HTTPRequests   *prometheus.CounterVec
 }
 
-// NewRegistry constructs the collector bundle for the configured namespace and subsystem.
-// Inputs and outputs:
-// - namespace and subsystem are prepended to all metric names (e.g. "gotaskq_worker_jobs_total").
-// - returns the registry wrapper used by handlers, workers, and bootstrap code.
-// Key implementation steps:
-// 1. Define counters, gauges, and histograms using namespace and subsystem.
-// 2. Return the registry wrapper for deferred registration.
-// Gotchas:
-// - Avoid double-registering collectors in tests; use a fresh prometheus.NewRegistry() per test.
-func NewRegistry(namespace, subsystem string) (registry *Registry) {
-	// Implementation intentionally omitted.
-	return
+// NewRegistry constructs all collectors for the given namespace and subsystem.
+func NewRegistry(namespace, subsystem string) *Registry {
+	r := &Registry{
+		Namespace: namespace,
+		Subsystem: subsystem,
+	}
+
+	r.JobEnqueued = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "jobs_enqueued_total",
+		Help:      "Total number of jobs enqueued.",
+	})
+	r.JobStarted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "jobs_started_total",
+		Help:      "Total number of jobs started.",
+	})
+	r.JobCompleted = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "jobs_completed_total",
+		Help:      "Total number of jobs completed successfully.",
+	})
+	r.JobFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "jobs_failed_total",
+		Help:      "Total number of jobs that failed.",
+	})
+	r.JobCancelled = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "jobs_cancelled_total",
+		Help:      "Total number of jobs cancelled.",
+	})
+	r.WorkerInFlight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "worker_in_flight",
+		Help:      "Number of jobs currently being processed.",
+	})
+	r.JobDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "job_duration_seconds",
+		Help:      "Execution duration of jobs in seconds.",
+		Buckets:   prometheus.DefBuckets,
+	})
+	r.HTTPRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "http_requests_total",
+		Help:      "Total HTTP requests partitioned by method, path, and status.",
+	}, []string{"method", "path", "status"})
+
+	return r
 }
 
-// Register binds the collectors to a Prometheus registerer.
-// Inputs and outputs:
-// - registerer is the registry or gatherer sink that should receive the collectors.
-// - returns any registration error encountered.
-// Key implementation steps:
-// 1. Register each collector once.
-// 2. Handle already-registered collectors deterministically.
-// 3. Return an actionable error when registration fails.
-// Gotchas:
-// - Duplicate registration errors are common when tests share global state.
-func (r *Registry) Register(registerer prometheus.Registerer) (err error) {
-	// Implementation intentionally omitted.
-	return
+// Register binds all collectors to the supplied Prometheus registerer.
+func (r *Registry) Register(registerer prometheus.Registerer) error {
+	collectors := []prometheus.Collector{
+		r.JobEnqueued,
+		r.JobStarted,
+		r.JobCompleted,
+		r.JobFailed,
+		r.JobCancelled,
+		r.WorkerInFlight,
+		r.JobDuration,
+		r.HTTPRequests,
+	}
+	for _, c := range collectors {
+		if err := registerer.Register(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// Handler returns an HTTP handler suitable for mounting on /metrics.
-// Inputs and outputs:
-// - none: the handler is derived from the registry's collectors.
-// - returns the Prometheus scrape endpoint handler.
-// Key implementation steps:
-// 1. Build or reuse a promhttp handler.
-// 2. Expose it for the Gin router or raw HTTP server.
-// 3. Keep scrape behavior stable under load.
-// Gotchas:
-// - Scrape handlers should stay fast and allocation-light.
-func (r *Registry) Handler() (handler http.Handler) {
-	// Implementation intentionally omitted.
-	return
+// Handler returns the Prometheus scrape endpoint handler.
+func (r *Registry) Handler() http.Handler {
+	return promhttp.Handler()
 }

@@ -62,6 +62,11 @@ func (h *Handler) EnqueueJob(c *gin.Context) {
 		return
 	}
 
+	if job.Task.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "task.name is required"})
+		return
+	}
+
 	id, err := h.Queue.Enqueue(c.Request.Context(), job)
 	if err != nil {
 		h.Logger.Error().Err(err).Msg("enqueue failed")

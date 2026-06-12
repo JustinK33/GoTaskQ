@@ -7,21 +7,27 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/example/gotaskq/internal/queue"
 	"github.com/example/gotaskq/internal/store"
 	"github.com/example/gotaskq/pkg/models"
+	"github.com/rs/zerolog"
 )
 
-// JobService implements the api.Queue interface by bridging KafkaClient and PostgresStore.
+// Publisher is the subset of queue.KafkaClient that JobService actually needs.
+type Publisher interface {
+	Publish(context.Context, string, models.Job) error
+}
+
+// JobService implements the api.Queue interface by bridging a Publisher and PostgresStore.
 type JobService struct {
-	kafka *queue.KafkaClient
+	kafka Publisher
 	store store.JobStore
 	topic string
+	log   zerolog.Logger
 }
 
 // NewJobService creates a job service that persists to Postgres and publishes to Kafka.
-func NewJobService(kafka *queue.KafkaClient, s store.JobStore, topic string) *JobService {
-	return &JobService{kafka: kafka, store: s, topic: topic}
+func NewJobService(kafka Publisher, s store.JobStore, topic string, log zerolog.Logger) *JobService {
+	return &JobService{kafka: kafka, store: s, topic: topic, log: log}
 }
 
 // Enqueue assigns an ID, persists the job, publishes it to Kafka, and returns the ID.
@@ -45,11 +51,12 @@ func (s *JobService) Enqueue(ctx context.Context, job models.Job) (string, error
 		return "", fmt.Errorf("service: persist job: %w", err)
 	}
 
-	// Publish to Kafka asynchronously: Postgres is the durable source of truth.
-	// If Kafka delivery fails the job remains PENDING and can be reconciled by the scheduler.
+	// Postgres is source of truth. Kafka is best-effort — the scheduler picks
+	// up anything that never got consumed.
 	go func() {
 		if err := s.kafka.Publish(context.Background(), s.topic, job); err != nil {
-			_ = err // caller already has the job ID; log via metrics in a production logger
+			s.log.Warn().Err(err).Str("job_id", job.ID).
+				Msg("service: async kafka publish failed; job remains PENDING for reconciliation")
 		}
 	}()
 
