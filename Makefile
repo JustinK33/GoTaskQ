@@ -1,10 +1,29 @@
-.PHONY: test test-race vet build tidy docker-up docker-down
+.PHONY: up down restart logs ps test test-race vet build tidy enqueue status
 
-# Run all unit tests (skips integration tests that require docker-up)
+# Start the full stack (builds the app image, waits for health checks)
+up:
+	docker compose up -d --build
+
+# Stop the stack and wipe volumes (fresh state on next `make up`)
+down:
+	docker compose down -v
+
+# Full restart: wipe and rebuild from scratch
+restart: down up
+
+# Tail logs for all services; use `make logs s=app` to filter
+logs:
+	docker compose logs -f $(s)
+
+# Show running container status
+ps:
+	docker compose ps
+
+# Run all unit tests
 test:
 	go test ./...
 
-# Run tests with the race detector enabled (finds concurrency bugs)
+# Run tests with the race detector
 test-race:
 	go test -race ./...
 
@@ -14,16 +33,18 @@ vet:
 
 # Compile the server binary
 build:
-	go build ./cmd/server
+	go build -o bin/gotaskq ./cmd/server
 
-# Download dependencies and regenerate go.sum
+# Download dependencies and tidy go.sum
 tidy:
 	go mod tidy
 
-# Start the full local stack (Kafka, Postgres, Redis, Prometheus, Grafana)
-docker-up:
-	docker compose up -d
+# Enqueue a sample job (stack must be running)
+enqueue:
+	curl -s -X POST http://localhost:8080/api/jobs \
+		-H "Content-Type: application/json" \
+		-d '{"task":{"name":"example","payload":"aGVsbG8="}}' | jq .
 
-# Stop and remove the local stack containers
-docker-down:
-	docker compose down
+# Get job status — usage: make status id=<job-id>
+status:
+	curl -s http://localhost:8080/api/jobs/$(id) | jq .
