@@ -170,6 +170,11 @@ func run(ctx context.Context) error {
 	handler := api.NewHandler(jobSvc, jobStore, logger.WithComponent(log, "api"), reg)
 	handler.RegisterRoutes(router)
 	router.GET("/metrics", gin.WrapH(reg.Handler()))
+	router.GET("/live", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	router.GET("/ready", readinessHandler(pgPool, redisClients, log))
+	// /health kept for backward compat — same as /live.
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -375,6 +380,48 @@ func (jw *jobWorker) deadLetter(ctx context.Context, job models.Job, runErr erro
 	}
 	jw.log.Error().Err(runErr).Str("job_id", job.ID).Int("attempts", job.Attempt).Msg("job exhausted retries")
 	return runErr
+}
+
+// readinessHandler verifies the service can actually serve traffic by pinging
+// each downstream. Postgres is required; Redis is required to quorum (>= N/2+1
+// nodes responding) since the lock manager depends on it.
+func readinessHandler(pg *pgxpool.Pool, redisClients []redis.UniversalClient, log zerolog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+
+		checks := gin.H{}
+		ok := true
+
+		if err := pg.Ping(ctx); err != nil {
+			checks["postgres"] = err.Error()
+			ok = false
+		} else {
+			checks["postgres"] = "ok"
+		}
+
+		alive := 0
+		for i, client := range redisClients {
+			if err := client.Ping(ctx).Err(); err != nil {
+				checks[fmt.Sprintf("redis[%d]", i)] = err.Error()
+				continue
+			}
+			checks[fmt.Sprintf("redis[%d]", i)] = "ok"
+			alive++
+		}
+		quorum := len(redisClients)/2 + 1
+		if alive < quorum {
+			ok = false
+			checks["redis_quorum"] = fmt.Sprintf("%d/%d (need %d)", alive, len(redisClients), quorum)
+		}
+
+		status := http.StatusOK
+		if !ok {
+			status = http.StatusServiceUnavailable
+			log.Warn().Interface("checks", checks).Msg("readiness probe failed")
+		}
+		c.JSON(status, gin.H{"status": map[bool]string{true: "ready", false: "not_ready"}[ok], "checks": checks})
+	}
 }
 
 // kafkaJobHandler bridges Kafka messages to the worker pool.
