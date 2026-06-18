@@ -9,7 +9,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Config captures zerolog setup options for the application.
 type Config struct {
 	Level       string
 	Format      string
@@ -19,7 +18,6 @@ type Config struct {
 	AddCaller   bool
 }
 
-// New builds the service logger using the supplied configuration.
 func New(cfg Config) (zerolog.Logger, error) {
 	level, err := zerolog.ParseLevel(cfg.Level)
 	if err != nil {
@@ -47,12 +45,11 @@ func New(cfg Config) (zerolog.Logger, error) {
 	return ctx.Logger(), nil
 }
 
-// ConfigureGlobal installs the logger as the process-wide default.
+// ConfigureGlobal installs log as the default returned by zerolog.Ctx.
 func ConfigureGlobal(log zerolog.Logger) {
 	zerolog.DefaultContextLogger = &log
 }
 
-// WithComponent returns a logger scoped to a named subsystem.
 func WithComponent(log zerolog.Logger, component string) zerolog.Logger {
 	return log.With().Str("component", component).Logger()
 }

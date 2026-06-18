@@ -12,15 +12,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Schedule describes a cron-style recurrence contract.
 type Schedule interface {
 	Next(time.Time) time.Time
 }
 
-// JobFunc is the callback executed for a recurring job.
 type JobFunc func(context.Context, models.Job) error
 
-// Entry defines a recurring job registration.
 type Entry struct {
 	Name    string
 	Cron    string
@@ -29,7 +26,6 @@ type Entry struct {
 	Enabled bool
 }
 
-// Scheduler manages recurring job execution.
 type Scheduler struct {
 	entries      map[string]Entry
 	schedules    map[string]Schedule
@@ -42,7 +38,6 @@ type Scheduler struct {
 	cancel       context.CancelFunc
 }
 
-// New constructs a scheduler with the supplied tick interval.
 func New(tickInterval time.Duration) *Scheduler {
 	if tickInterval <= 0 {
 		tickInterval = time.Minute
@@ -56,7 +51,7 @@ func New(tickInterval time.Duration) *Scheduler {
 	}
 }
 
-// Register adds or replaces a recurring entry after validating its cron expression.
+// Register adds or replaces an entry. Cron expression is validated up front.
 func (s *Scheduler) Register(entry Entry) error {
 	if entry.Name == "" {
 		return fmt.Errorf("scheduler: entry name is required")
@@ -72,7 +67,6 @@ func (s *Scheduler) Register(entry Entry) error {
 	return nil
 }
 
-// Start begins the scheduler tick loop in the background.
 func (s *Scheduler) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.running {

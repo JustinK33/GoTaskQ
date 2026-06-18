@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -210,6 +209,3 @@ func TestCancelJob(t *testing.T) {
 		})
 	}
 }
-
-// helper used to suppress unused import error before implementation is done
-var _ = json.Marshal

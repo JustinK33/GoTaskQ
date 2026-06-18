@@ -11,24 +11,20 @@ import (
 	"github.com/example/gotaskq/pkg/models"
 )
 
-// MessageHandler consumes Kafka messages and turns them into worker actions.
 type MessageHandler interface {
 	Handle(context.Context, *sarama.ConsumerMessage) error
 }
 
-// Producer publishes durable jobs into Kafka.
 type Producer interface {
 	Publish(context.Context, string, models.Job) error
 	Close() error
 }
 
-// Consumer starts a Kafka consumer group loop.
 type Consumer interface {
 	Consume(context.Context, []string, MessageHandler) error
 	Close() error
 }
 
-// KafkaClient wraps the Sarama producer and consumer group handles.
 type KafkaClient struct {
 	Producer        sarama.SyncProducer
 	ConsumerGroup   sarama.ConsumerGroup
@@ -36,7 +32,6 @@ type KafkaClient struct {
 	ConsumerGroupID string
 }
 
-// NewKafkaClient constructs a Kafka transport wrapper from shared configuration.
 func NewKafkaClient(cfg models.KafkaConfig) (*KafkaClient, error) {
 	sc := sarama.NewConfig()
 	sc.ClientID = cfg.ClientID
@@ -71,7 +66,6 @@ func NewKafkaClient(cfg models.KafkaConfig) (*KafkaClient, error) {
 	}, nil
 }
 
-// Publish serialises a job and sends it to the given Kafka topic.
 func (k *KafkaClient) Publish(_ context.Context, topic string, job models.Job) error {
 	payload, err := json.Marshal(job)
 	if err != nil {
@@ -115,7 +109,6 @@ func (h *cgHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sara
 	}
 }
 
-// Consume begins a consumer group loop, dispatching each message to the handler.
 func (k *KafkaClient) Consume(ctx context.Context, topics []string, handler MessageHandler) error {
 	h := &cgHandler{handler: handler}
 	for {
@@ -128,7 +121,6 @@ func (k *KafkaClient) Consume(ctx context.Context, topics []string, handler Mess
 	}
 }
 
-// Close releases the underlying Kafka transport resources.
 func (k *KafkaClient) Close() error {
 	var errs []error
 	if err := k.Producer.Close(); err != nil {

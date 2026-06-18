@@ -124,9 +124,8 @@ func TestBreakerRecordSuccess(t *testing.T) {
 
 	t.Run("recovers to closed after enough successes in half-open", func(t *testing.T) {
 		b := New(Config{FailureThreshold: 1, SuccessThreshold: 2, OpenTimeout: time.Nanosecond, HalfOpenRequests: 2})
-		b.RecordFailure() // trip to open
+		b.RecordFailure()
 		time.Sleep(2 * time.Nanosecond)
-		// Allow() should move breaker to half-open
 		b.Allow()
 		b.RecordSuccess()
 		b.RecordSuccess()

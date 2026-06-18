@@ -13,14 +13,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Queue is the business-level adapter over the transport layer.
-// Enqueue persists a job and publishes it; Cancel applies the cancel transition in the store.
+// Queue is the business-level adapter exposed to the HTTP layer.
 type Queue interface {
 	Enqueue(context.Context, models.Job) (string, error)
 	Cancel(context.Context, string) error
 }
 
-// Handler wires the Gin routes to the queue and store contracts.
 type Handler struct {
 	Queue   Queue
 	Store   store.JobStore
@@ -28,12 +26,10 @@ type Handler struct {
 	Metrics *metrics.Registry
 }
 
-// NewHandler creates the API handler bundle.
 func NewHandler(queue Queue, jobs store.JobStore, logger zerolog.Logger, reg *metrics.Registry) *Handler {
 	return &Handler{Queue: queue, Store: jobs, Logger: logger, Metrics: reg}
 }
 
-// RegisterRoutes mounts the enqueue, status, and cancel endpoints plus a metrics middleware.
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	router.Use(h.metricsMiddleware())
 	g := router.Group("/api/jobs")
@@ -42,7 +38,6 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	g.POST("/:id/cancel", h.CancelJob)
 }
 
-// metricsMiddleware records HTTP request counts by method, path, and status.
 func (h *Handler) metricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
@@ -54,7 +49,6 @@ func (h *Handler) metricsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// EnqueueJob accepts a job creation request and forwards it to the queue.
 func (h *Handler) EnqueueJob(c *gin.Context) {
 	var job models.Job
 	if err := c.ShouldBindJSON(&job); err != nil {
@@ -78,7 +72,6 @@ func (h *Handler) EnqueueJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
-// GetJobStatus returns the current durable status for a job.
 func (h *Handler) GetJobStatus(c *gin.Context) {
 	id := c.Param("id")
 
@@ -96,7 +89,6 @@ func (h *Handler) GetJobStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, job)
 }
 
-// CancelJob requests cancellation for a job.
 func (h *Handler) CancelJob(c *gin.Context) {
 	id := c.Param("id")
 

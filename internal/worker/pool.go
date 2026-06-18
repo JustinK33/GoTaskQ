@@ -10,19 +10,16 @@ import (
 	"github.com/example/gotaskq/pkg/models"
 )
 
-// JobRunner performs the actual business work for a job.
 type JobRunner interface {
 	Run(context.Context, models.Job) error
 }
 
-// Config controls the goroutine pool and semaphore bounds.
 type Config struct {
 	Concurrency     int
 	QueueSize       int
 	ShutdownTimeout time.Duration
 }
 
-// Pool owns the in-process worker lifecycle and concurrency control.
 type Pool struct {
 	Runner    JobRunner
 	jobs      chan models.Job
@@ -31,7 +28,6 @@ type Pool struct {
 	wg        sync.WaitGroup
 }
 
-// NewPool constructs a worker pool with the given runner and concurrency policy.
 func NewPool(cfg Config, runner JobRunner) *Pool {
 	return &Pool{
 		Runner:    runner,
@@ -41,7 +37,6 @@ func NewPool(cfg Config, runner JobRunner) *Pool {
 	}
 }
 
-// Start begins draining the pool's job queue in the background.
 func (p *Pool) Start(ctx context.Context) {
 	go func() {
 		for {
@@ -69,8 +64,7 @@ func (p *Pool) Start(ctx context.Context) {
 	}()
 }
 
-// Submit enqueues a job if context and buffer capacity permit.
-// Returns false immediately when the queue is full or the context is done.
+// Submit returns false (without blocking) when the queue is full or ctx is done.
 func (p *Pool) Submit(ctx context.Context, job models.Job) bool {
 	if ctx.Err() != nil {
 		return false
@@ -85,7 +79,7 @@ func (p *Pool) Submit(ctx context.Context, job models.Job) bool {
 	}
 }
 
-// Stop closes the job queue and waits for in-flight work to drain within the deadline.
+// Stop closes the queue and waits for in-flight work, bounded by ctx.
 func (p *Pool) Stop(ctx context.Context) error {
 	close(p.jobs)
 

@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// JobStore defines the PostgreSQL state machine contract for jobs.
+// JobStore is the durable state machine contract for jobs.
 type JobStore interface {
 	CreateJob(context.Context, models.Job) error
 	UpdateJob(context.Context, models.Job) error
@@ -22,18 +22,15 @@ type JobStore interface {
 	ClaimNextJob(context.Context) (models.Job, error)
 }
 
-// PostgresStore wraps the pgx pool used to persist job state.
 type PostgresStore struct {
 	Pool      *pgxpool.Pool
 	TableName string
 }
 
-// NewPostgresStore creates a store wrapper around the supplied pgx pool.
 func NewPostgresStore(pool *pgxpool.Pool, tableName string) *PostgresStore {
 	return &PostgresStore{Pool: pool, TableName: tableName}
 }
 
-// CreateJob inserts a new job record into the store.
 func (s *PostgresStore) CreateJob(ctx context.Context, job models.Job) error {
 	taskMetaBytes, err := json.Marshal(job.Task.Metadata)
 	if err != nil {
@@ -87,7 +84,6 @@ func (s *PostgresStore) CreateJob(ctx context.Context, job models.Job) error {
 	return err
 }
 
-// GetJob loads a job record by identifier.
 func (s *PostgresStore) GetJob(ctx context.Context, id string) (models.Job, error) {
 	query := fmt.Sprintf(`
 		SELECT
@@ -154,7 +150,7 @@ func (s *PostgresStore) GetJob(ctx context.Context, id string) (models.Job, erro
 	return job, nil
 }
 
-// UpdateJob validates the state transition and persists the updated job snapshot.
+// UpdateJob validates the state transition before persisting.
 func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) error {
 	existing, err := s.GetJob(ctx, job.ID)
 	if err != nil {
@@ -164,8 +160,14 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) error {
 		return ErrInvalidTransition
 	}
 
-	metaBytes, _ := json.Marshal(job.Metadata)
-	taskMetaBytes, _ := json.Marshal(job.Task.Metadata)
+	metaBytes, err := json.Marshal(job.Metadata)
+	if err != nil {
+		return fmt.Errorf("store: marshal metadata: %w", err)
+	}
+	taskMetaBytes, err := json.Marshal(job.Task.Metadata)
+	if err != nil {
+		return fmt.Errorf("store: marshal task metadata: %w", err)
+	}
 	job.UpdatedAt = time.Now().UTC()
 
 	query := fmt.Sprintf(`
@@ -204,7 +206,7 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) error {
 	return nil
 }
 
-// CancelJob marks a job as dead, respecting the state machine rules.
+// CancelJob transitions a job to DEAD if the state machine allows it.
 func (s *PostgresStore) CancelJob(ctx context.Context, id string) error {
 	job, err := s.GetJob(ctx, id)
 	if err != nil {
@@ -222,7 +224,8 @@ func (s *PostgresStore) CancelJob(ctx context.Context, id string) error {
 	return err
 }
 
-// ClaimNextJob atomically selects the next PENDING job and marks it RUNNING.
+// ClaimNextJob atomically selects the next PENDING job and marks it RUNNING,
+// using SELECT … FOR UPDATE SKIP LOCKED so concurrent workers don't double-claim.
 func (s *PostgresStore) ClaimNextJob(ctx context.Context) (models.Job, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

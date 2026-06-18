@@ -17,7 +17,6 @@ type Publisher interface {
 	Publish(context.Context, string, models.Job) error
 }
 
-// JobService implements the api.Queue interface by bridging a Publisher and PostgresStore.
 type JobService struct {
 	kafka Publisher
 	store store.JobStore
@@ -25,12 +24,10 @@ type JobService struct {
 	log   zerolog.Logger
 }
 
-// NewJobService creates a job service that persists to Postgres and publishes to Kafka.
 func NewJobService(kafka Publisher, s store.JobStore, topic string, log zerolog.Logger) *JobService {
 	return &JobService{kafka: kafka, store: s, topic: topic, log: log}
 }
 
-// Enqueue assigns an ID, persists the job, publishes it to Kafka, and returns the ID.
 func (s *JobService) Enqueue(ctx context.Context, job models.Job) (string, error) {
 	if job.ID == "" {
 		id, err := newJobID()
@@ -63,7 +60,6 @@ func (s *JobService) Enqueue(ctx context.Context, job models.Job) (string, error
 	return job.ID, nil
 }
 
-// Cancel marks the job as dead in the store.
 func (s *JobService) Cancel(ctx context.Context, id string) error {
 	if err := s.store.CancelJob(ctx, id); err != nil {
 		return fmt.Errorf("service: cancel job %s: %w", id, err)

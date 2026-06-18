@@ -74,7 +74,7 @@ func TestPoolSubmit(t *testing.T) {
 
 	t.Run("returns false for cancelled context", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // already cancelled
+		cancel()
 
 		p := NewPool(Config{Concurrency: 2, QueueSize: 4, ShutdownTimeout: time.Second}, mockRunner{})
 

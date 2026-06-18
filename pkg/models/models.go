@@ -2,8 +2,7 @@ package models
 
 import "time"
 
-// JobState represents the lifecycle stage of a queued task.
-// The constants define the durable state machine used by the API, store, and worker layers.
+// JobState is the durable lifecycle stage of a queued task.
 type JobState string
 
 const (
@@ -15,7 +14,6 @@ const (
 )
 
 // Task describes the payload and execution metadata for a job.
-// The fields are broad enough to support queueing, retries, and recurring schedules.
 type Task struct {
 	ID             string
 	Name           string
@@ -28,8 +26,7 @@ type Task struct {
 	Metadata       map[string]string
 }
 
-// Job is the durable execution record that moves through the queue and store state machine.
-// Timestamps and error fields allow the service to report status transitions clearly.
+// Job is the durable execution record that moves through the state machine.
 type Job struct {
 	ID          string
 	Task        Task
@@ -44,8 +41,6 @@ type Job struct {
 	UpdatedAt   time.Time
 }
 
-// HTTPConfig configures the server listener and request timeout behavior.
-// The API layer and main entrypoint consume this as part of the service bootstrap contract.
 type HTTPConfig struct {
 	Address      string
 	ReadTimeout  time.Duration
@@ -53,25 +48,18 @@ type HTTPConfig struct {
 	IdleTimeout  time.Duration
 }
 
-// KafkaConfig describes the queue transport topology.
-// The consumer group and dead-letter topic are included so retries and failures can be routed explicitly.
 type KafkaConfig struct {
-	Brokers       []string
-	Topic         string
-	ConsumerGroup string
-	// DeadLetterTopic is wired in config but not yet consumed — failed messages
-	// are currently logged and dropped rather than re-routed.
-	DeadLetterTopic   string
+	Brokers           []string
+	Topic             string
+	ConsumerGroup     string
 	ClientID          string
 	RequiredAcks      int16
-	CompressionCodec  int           // 0=none 1=gzip 2=snappy 3=lz4 4=zstd
-	FlushFrequencyMs  int           // producer flush interval in milliseconds
-	FlushBytes        int           // producer flush threshold in bytes
-	ChannelBufferSize int           // sarama internal channel buffer depth
+	CompressionCodec  int // 0=none 1=gzip 2=snappy 3=lz4 4=zstd
+	FlushFrequencyMs  int
+	FlushBytes        int
+	ChannelBufferSize int
 }
 
-// RedisConfig configures the distributed locking and coordination layer.
-// Multiple addresses support quorum-style lock acquisition.
 type RedisConfig struct {
 	Addresses []string
 	Username  string
@@ -80,8 +68,6 @@ type RedisConfig struct {
 	PoolSize  int
 }
 
-// PostgresConfig configures the durable job state store.
-// The DSN and pool settings are consumed by the store package.
 type PostgresConfig struct {
 	DSN               string
 	MaxConns          int32
@@ -92,32 +78,24 @@ type PostgresConfig struct {
 	HealthCheckPeriod time.Duration
 }
 
-// WorkerConfig controls the goroutine pool and shutdown behavior.
-// The semaphore-based worker pool will use these values to bound concurrent execution.
 type WorkerConfig struct {
 	Concurrency     int
 	QueueSize       int
 	ShutdownTimeout time.Duration
 }
 
-// SchedulerConfig configures recurring job dispatch behavior.
-// The scheduler package can use these values to plan cron-style job launches.
 type SchedulerConfig struct {
 	Enabled           bool
 	TickInterval      time.Duration
 	MaxConcurrentRuns int
 }
 
-// MetricsConfig controls Prometheus registration and exposure.
-// Namespace and listener settings keep metrics deployment explicit.
 type MetricsConfig struct {
 	Namespace     string
 	Subsystem     string
 	ListenAddress string
 }
 
-// LoggerConfig defines structured logging preferences for zerolog.
-// The configuration is kept independent of the logger implementation details.
 type LoggerConfig struct {
 	Level       string
 	Format      string
@@ -127,8 +105,6 @@ type LoggerConfig struct {
 	AddCaller   bool
 }
 
-// Config aggregates the service-wide configuration tree.
-// Main and the subsystem constructors can consume this shape without knowing the source of the values.
 type Config struct {
 	HTTP      HTTPConfig
 	Kafka     KafkaConfig

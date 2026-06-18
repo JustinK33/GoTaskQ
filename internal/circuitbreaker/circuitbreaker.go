@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// State represents the current circuit breaker state.
 type State string
 
 const (
@@ -14,7 +13,6 @@ const (
 	StateHalfOpen State = "half-open"
 )
 
-// Config defines the thresholds and timeout windows for the circuit breaker.
 type Config struct {
 	FailureThreshold int
 	SuccessThreshold int
@@ -22,7 +20,6 @@ type Config struct {
 	HalfOpenRequests int
 }
 
-// Breaker holds the mutable state for the circuit breaker state machine.
 type Breaker struct {
 	mu        sync.Mutex
 	cfg       Config
@@ -32,7 +29,6 @@ type Breaker struct {
 	openedAt  time.Time
 }
 
-// New constructs a circuit breaker initialised in the closed state.
 func New(cfg Config) *Breaker {
 	if cfg.FailureThreshold <= 0 {
 		cfg.FailureThreshold = 5
@@ -49,7 +45,6 @@ func New(cfg Config) *Breaker {
 	return &Breaker{cfg: cfg, state: StateClosed}
 }
 
-// Allow reports whether the protected call may proceed.
 func (b *Breaker) Allow() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -71,7 +66,6 @@ func (b *Breaker) Allow() bool {
 	return false
 }
 
-// RecordSuccess informs the breaker that a protected call succeeded.
 func (b *Breaker) RecordSuccess() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -89,7 +83,6 @@ func (b *Breaker) RecordSuccess() {
 	}
 }
 
-// RecordFailure informs the breaker that a protected call failed.
 func (b *Breaker) RecordFailure() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -109,7 +102,6 @@ func (b *Breaker) RecordFailure() {
 	}
 }
 
-// State returns the current breaker state.
 func (b *Breaker) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()

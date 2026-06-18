@@ -9,7 +9,6 @@ import (
 // ErrNoRetry short-circuits the retry loop for permanent failures (bad input, missing record, etc).
 var ErrNoRetry = errors.New("retry: permanent failure, no retry")
 
-// Config describes the exponential backoff curve used by the worker and queue layers.
 type Config struct {
 	BaseDelay   time.Duration
 	MaxDelay    time.Duration
@@ -18,12 +17,11 @@ type Config struct {
 	Jitter      float64
 }
 
-// Engine computes retry timing decisions for job resubmission.
 type Engine struct {
 	Config Config
 }
 
-// NewEngine constructs a retry engine, normalising any invalid timing fields.
+// NewEngine returns an Engine with invalid fields normalised to sensible defaults.
 func NewEngine(cfg Config) *Engine {
 	if cfg.BaseDelay <= 0 {
 		cfg.BaseDelay = time.Second
@@ -46,7 +44,7 @@ func NewEngine(cfg Config) *Engine {
 	return &Engine{Config: cfg}
 }
 
-// Delay returns the computed wait duration before the next retry attempt.
+// Delay returns the wait time before retrying after `attempt` failures.
 func (e *Engine) Delay(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0

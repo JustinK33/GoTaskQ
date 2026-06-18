@@ -11,7 +11,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Config describes the quorum and retry behavior for distributed locking.
 type Config struct {
 	Quorum      int
 	TTL         time.Duration
@@ -20,20 +19,19 @@ type Config struct {
 	DriftFactor float64
 }
 
-// Lock captures a distributed lock lease.
+// Lock is a held distributed-lock lease.
 type Lock struct {
 	Resource string
 	Value    string
 	Expiry   time.Time
 }
 
-// Manager coordinates lock acquisition across multiple Redis clients.
+// Manager runs the Redlock quorum protocol across multiple Redis clients.
 type Manager struct {
 	clients []redis.UniversalClient
 	cfg     Config
 }
 
-// NewManager constructs a lock manager with sensible defaults for unset fields.
 func NewManager(clients []redis.UniversalClient, cfg Config) *Manager {
 	if cfg.Quorum <= 0 {
 		cfg.Quorum = len(clients)/2 + 1
@@ -53,7 +51,8 @@ func NewManager(clients []redis.UniversalClient, cfg Config) *Manager {
 	return &Manager{clients: clients, cfg: cfg}
 }
 
-// Acquire attempts to claim a distributed lock for the named resource using the Redlock algorithm.
+// Acquire claims a Redlock-style quorum lease on resource. Retries up to
+// cfg.RetryCount times with cfg.RetryDelay between attempts.
 func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
 	value, err := generateToken()
 	if err != nil {
@@ -113,7 +112,6 @@ func releaseSingle(ctx context.Context, client redis.UniversalClient, resource, 
 	releaseScript.Run(ctx, client, []string{resource}, value)
 }
 
-// Release relinquishes the distributed lock on all quorum nodes.
 func (m *Manager) Release(ctx context.Context, lock Lock) error {
 	var errs []error
 	for _, client := range m.clients {

@@ -7,9 +7,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var _ = promhttp.Handler
-
-// Registry groups the Prometheus collectors exposed by GoTaskQ.
 type Registry struct {
 	Namespace      string
 	Subsystem      string
@@ -23,7 +20,6 @@ type Registry struct {
 	HTTPRequests   *prometheus.CounterVec
 }
 
-// NewRegistry constructs all collectors for the given namespace and subsystem.
 func NewRegistry(namespace, subsystem string) *Registry {
 	r := &Registry{
 		Namespace: namespace,
@@ -83,7 +79,6 @@ func NewRegistry(namespace, subsystem string) *Registry {
 	return r
 }
 
-// Register binds all collectors to the supplied Prometheus registerer.
 func (r *Registry) Register(registerer prometheus.Registerer) error {
 	collectors := []prometheus.Collector{
 		r.JobEnqueued,
@@ -103,7 +98,6 @@ func (r *Registry) Register(registerer prometheus.Registerer) error {
 	return nil
 }
 
-// Handler returns the Prometheus scrape endpoint handler.
 func (r *Registry) Handler() http.Handler {
 	return promhttp.Handler()
 }
