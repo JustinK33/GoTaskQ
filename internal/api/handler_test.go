@@ -50,8 +50,11 @@ func (m mockStore) UpdateJob(context.Context, models.Job) error        { return 
 func (m mockStore) GetJob(_ context.Context, _ string) (models.Job, error) {
 	return m.job, m.getErr
 }
-func (m mockStore) CancelJob(context.Context, string) error           { return nil }
-func (m mockStore) ClaimNextJob(context.Context) (models.Job, error)  { return models.Job{}, nil }
+func (m mockStore) CancelJob(context.Context, string) error          { return nil }
+func (m mockStore) ClaimNextJob(context.Context) (models.Job, error) { return models.Job{}, nil }
+func (m mockStore) ListJobs(context.Context, store.ListFilter) ([]models.Job, string, error) {
+	return nil, "", nil
+}
 
 func TestNewHandler(t *testing.T) {
 	t.Run("wires queue and store dependencies", func(t *testing.T) {

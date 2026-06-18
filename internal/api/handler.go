@@ -34,6 +34,7 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	router.Use(RequestID(h.Logger), RequestLogger(), Recovery(), h.metricsMiddleware())
 	g := router.Group("/api/jobs")
 	g.POST("", h.EnqueueJob)
+	g.GET("", h.ListJobs)
 	g.GET("/:id", h.GetJobStatus)
 	g.POST("/:id/cancel", h.CancelJob)
 }
@@ -90,6 +91,50 @@ func (h *Handler) GetJobStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, job)
+}
+
+// ListJobs returns a page of jobs, optionally filtered by ?state=PENDING/RUNNING/...
+// Pagination uses the opaque cursor returned in the previous page's `next_cursor`.
+//
+//	GET /api/jobs?state=FAILED&limit=20
+//	GET /api/jobs?cursor=<token>
+func (h *Handler) ListJobs(c *gin.Context) {
+	log := zerolog.Ctx(c.Request.Context())
+
+	filter := store.ListFilter{
+		State:  models.JobState(c.Query("state")),
+		Cursor: c.Query("cursor"),
+	}
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			RespondError(c, http.StatusBadRequest, "invalid_request", "limit must be a non-negative integer")
+			return
+		}
+		filter.Limit = n
+	}
+
+	switch filter.State {
+	case "",
+		models.JobStatePending, models.JobStateRunning,
+		models.JobStateCompleted, models.JobStateFailed, models.JobStateDead:
+	default:
+		RespondError(c, http.StatusBadRequest, "invalid_request",
+			"state must be one of PENDING, RUNNING, COMPLETED, FAILED, DEAD")
+		return
+	}
+
+	jobs, nextCursor, err := h.Store.ListJobs(c.Request.Context(), filter)
+	if err != nil {
+		log.Error().Err(err).Msg("list jobs failed")
+		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to list jobs")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"jobs":        jobs,
+		"next_cursor": nextCursor,
+	})
 }
 
 func (h *Handler) CancelJob(c *gin.Context) {

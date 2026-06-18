@@ -2,9 +2,12 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/example/gotaskq/pkg/models"
@@ -20,6 +23,16 @@ type JobStore interface {
 	GetJob(context.Context, string) (models.Job, error)
 	CancelJob(context.Context, string) error
 	ClaimNextJob(context.Context) (models.Job, error)
+	ListJobs(context.Context, ListFilter) ([]models.Job, string, error)
+}
+
+// ListFilter narrows a ListJobs call. State is optional — empty string means
+// any state. Cursor is the opaque token returned by the previous page; pass
+// empty string for the first page. Limit is capped server-side.
+type ListFilter struct {
+	State  models.JobState
+	Limit  int
+	Cursor string
 }
 
 type PostgresStore struct {
@@ -95,58 +108,13 @@ func (s *PostgresStore) GetJob(ctx context.Context, id string) (models.Job, erro
 			created_at, updated_at, metadata
 		FROM %s WHERE id = $1`, s.TableName)
 
-	row := s.Pool.QueryRow(ctx, query, id)
-
-	var (
-		job          models.Job
-		taskMetaJSON []byte
-		metaJSON     []byte
-		timeoutNS    int64
-		state        string
-	)
-
-	err := row.Scan(
-		&job.ID,
-		&job.Task.ID,
-		&job.Task.Name,
-		&job.Task.Payload,
-		&job.Task.RetryCount,
-		&job.Task.MaxRetries,
-		&timeoutNS,
-		&job.Task.CronExpression,
-		&job.Task.Queue,
-		&taskMetaJSON,
-		&state,
-		&job.Attempt,
-		&job.LastError,
-		&job.ScheduledAt,
-		&job.StartedAt,
-		&job.CompletedAt,
-		&job.CreatedAt,
-		&job.UpdatedAt,
-		&metaJSON,
-	)
+	job, err := scanJob(ctx, s.Pool.QueryRow(ctx, query, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.Job{}, ErrJobNotFound
 		}
 		return models.Job{}, err
 	}
-
-	job.State = models.JobState(state)
-	job.Task.Timeout = time.Duration(timeoutNS)
-
-	if len(taskMetaJSON) > 0 {
-		if err := json.Unmarshal(taskMetaJSON, &job.Task.Metadata); err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Str("job_id", id).Msg("store: failed to unmarshal task metadata")
-		}
-	}
-	if len(metaJSON) > 0 {
-		if err := json.Unmarshal(metaJSON, &job.Metadata); err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Str("job_id", id).Msg("store: failed to unmarshal job metadata")
-		}
-	}
-
 	return job, nil
 }
 
@@ -262,6 +230,153 @@ func (s *PostgresStore) ClaimNextJob(ctx context.Context) (models.Job, error) {
 	}
 
 	return s.GetJob(ctx, id)
+}
+
+// ListJobs returns up to filter.Limit jobs ordered by created_at DESC, id DESC,
+// optionally filtered by state. Pagination is keyset-based: callers pass the
+// `nextCursor` returned by the previous call to fetch the next page. An empty
+// returned cursor means "no more results."
+func (s *PostgresStore) ListJobs(ctx context.Context, filter ListFilter) ([]models.Job, string, error) {
+	const (
+		defaultLimit = 50
+		maxLimit     = 500
+	)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	args := []any{}
+	where := []string{"1=1"}
+	if filter.State != "" {
+		args = append(args, string(filter.State))
+		where = append(where, fmt.Sprintf("state = $%d", len(args)))
+	}
+	if filter.Cursor != "" {
+		ts, id, err := decodeCursor(filter.Cursor)
+		if err != nil {
+			return nil, "", fmt.Errorf("store: invalid cursor: %w", err)
+		}
+		args = append(args, ts, id)
+		// Standard keyset pagination: rows strictly after the cursor in our
+		// (created_at DESC, id DESC) ordering.
+		where = append(where, fmt.Sprintf("(created_at, id) < ($%d, $%d)", len(args)-1, len(args)))
+	}
+	args = append(args, limit+1) // fetch one extra to detect "has next"
+
+	query := fmt.Sprintf(`
+		SELECT
+			id, task_id, task_name, task_payload,
+			task_retry_count, task_max_retries, task_timeout_ns,
+			task_cron_expr, task_queue, task_metadata,
+			state, attempt, last_error,
+			scheduled_at, started_at, completed_at,
+			created_at, updated_at, metadata
+		FROM %s
+		WHERE %s
+		ORDER BY created_at DESC, id DESC
+		LIMIT $%d`, s.TableName, strings.Join(where, " AND "), len(args))
+
+	rows, err := s.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	jobs := make([]models.Job, 0, limit)
+	for rows.Next() {
+		job, err := scanJob(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextCursor string
+	if len(jobs) > limit {
+		last := jobs[limit-1]
+		nextCursor = encodeCursor(last.CreatedAt, last.ID)
+		jobs = jobs[:limit]
+	}
+	return jobs, nextCursor, nil
+}
+
+// scanJob reads one row from a pgx.Rows or pgx.Row into a models.Job. The
+// column order must match the SELECT in GetJob and ListJobs.
+func scanJob(ctx context.Context, row pgx.Row) (models.Job, error) {
+	var (
+		job          models.Job
+		taskMetaJSON []byte
+		metaJSON     []byte
+		timeoutNS    int64
+		state        string
+	)
+
+	err := row.Scan(
+		&job.ID,
+		&job.Task.ID,
+		&job.Task.Name,
+		&job.Task.Payload,
+		&job.Task.RetryCount,
+		&job.Task.MaxRetries,
+		&timeoutNS,
+		&job.Task.CronExpression,
+		&job.Task.Queue,
+		&taskMetaJSON,
+		&state,
+		&job.Attempt,
+		&job.LastError,
+		&job.ScheduledAt,
+		&job.StartedAt,
+		&job.CompletedAt,
+		&job.CreatedAt,
+		&job.UpdatedAt,
+		&metaJSON,
+	)
+	if err != nil {
+		return models.Job{}, err
+	}
+
+	job.State = models.JobState(state)
+	job.Task.Timeout = time.Duration(timeoutNS)
+
+	if len(taskMetaJSON) > 0 {
+		if err := json.Unmarshal(taskMetaJSON, &job.Task.Metadata); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Str("job_id", job.ID).Msg("store: failed to unmarshal task metadata")
+		}
+	}
+	if len(metaJSON) > 0 {
+		if err := json.Unmarshal(metaJSON, &job.Metadata); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Str("job_id", job.ID).Msg("store: failed to unmarshal job metadata")
+		}
+	}
+	return job, nil
+}
+
+func encodeCursor(t time.Time, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%d|%s", t.UnixMicro(), id)))
+}
+
+func decodeCursor(c string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", fmt.Errorf("malformed cursor")
+	}
+	micros, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	return time.UnixMicro(micros).UTC(), parts[1], nil
 }
 
 // CanTransition reports whether a job may move from one state to another.

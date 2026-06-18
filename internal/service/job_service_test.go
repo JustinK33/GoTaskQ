@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/example/gotaskq/internal/store"
 	"github.com/example/gotaskq/pkg/models"
 	"github.com/rs/zerolog"
 )
@@ -22,8 +23,11 @@ func (m *mockStore) CreateJob(_ context.Context, job models.Job) error {
 }
 func (m *mockStore) UpdateJob(_ context.Context, _ models.Job) error        { return nil }
 func (m *mockStore) GetJob(_ context.Context, _ string) (models.Job, error) { return models.Job{}, nil }
-func (m *mockStore) CancelJob(_ context.Context, _ string) error            { return m.cancelErr }
-func (m *mockStore) ClaimNextJob(_ context.Context) (models.Job, error)     { return models.Job{}, nil }
+func (m *mockStore) CancelJob(_ context.Context, _ string) error        { return m.cancelErr }
+func (m *mockStore) ClaimNextJob(_ context.Context) (models.Job, error) { return models.Job{}, nil }
+func (m *mockStore) ListJobs(context.Context, store.ListFilter) ([]models.Job, string, error) {
+	return nil, "", nil
+}
 
 // mockPublisher satisfies Publisher with controllable responses.
 type mockPublisher struct {
