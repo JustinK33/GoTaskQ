@@ -15,30 +15,30 @@ const (
 
 // Task describes the payload and execution metadata for a job.
 type Task struct {
-	ID             string
-	Name           string
-	Payload        []byte
-	RetryCount     int
-	MaxRetries     int
-	Timeout        time.Duration
-	CronExpression string
-	Queue          string
-	Metadata       map[string]string
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Payload        []byte            `json:"payload,omitempty"`
+	RetryCount     int               `json:"retry_count"`
+	MaxRetries     int               `json:"max_retries"`
+	Timeout        time.Duration     `json:"timeout"`
+	CronExpression string            `json:"cron_expression,omitempty"`
+	Queue          string            `json:"queue,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
 // Job is the durable execution record that moves through the state machine.
 type Job struct {
-	ID          string
-	Task        Task
-	State       JobState
-	Attempt     int
-	ScheduledAt *time.Time
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	LastError   string
-	Metadata    map[string]string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          string            `json:"id"`
+	Task        Task              `json:"task"`
+	State       JobState          `json:"state"`
+	Attempt     int               `json:"attempt"`
+	ScheduledAt *time.Time        `json:"scheduled_at,omitempty"`
+	StartedAt   *time.Time        `json:"started_at,omitempty"`
+	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	LastError   string            `json:"last_error,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 type HTTPConfig struct {
