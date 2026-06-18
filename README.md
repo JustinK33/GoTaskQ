@@ -63,6 +63,21 @@ curl -X POST http://localhost:8080/api/jobs \
 {"id": "5c8058ea-40d6-49f5-9547-cfb37426b368"}
 ```
 
+### List jobs
+
+```bash
+curl 'http://localhost:8080/api/jobs?state=FAILED&limit=20'
+```
+
+```json
+{
+  "jobs": [{"id": "...", "state": "FAILED", ...}, ...],
+  "next_cursor": "MTcxODcxNjQwMHwxMjMtNDU2"
+}
+```
+
+Pass `next_cursor` back as `?cursor=...` to fetch the next page. Empty string means "no more results."
+
 ### Get job status
 
 ```bash
@@ -87,12 +102,30 @@ curl http://localhost:8080/api/jobs/<id>
 curl -X POST http://localhost:8080/api/jobs/<id>/cancel
 ```
 
-### Health check
+### Health probes
 
 ```bash
-curl http://localhost:8080/health
-# {"status": "ok"}
+curl http://localhost:8080/live    # Liveness — 200 if process is up
+curl http://localhost:8080/ready   # Readiness — pings Postgres + Redis quorum
 ```
+
+`/ready` returns `503` with per-dependency status if any required dependency is down. `/health` is kept as a backward-compat alias for `/live`.
+
+### Error responses
+
+Every error follows the same envelope, including a `request_id` for log correlation:
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "job not found",
+    "request_id": "03121cd0a8fcb769"
+  }
+}
+```
+
+Stable error codes: `invalid_request`, `not_found`, `invalid_state`, `internal_error`. Pass `X-Request-Id` on requests to override the auto-generated id (useful for tracing across services).
 
 ### Metrics (Prometheus)
 

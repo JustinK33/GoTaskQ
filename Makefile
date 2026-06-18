@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps test test-race vet build tidy enqueue status
+.PHONY: up down restart logs ps test test-race vet build tidy enqueue status list ready
 
 # Start the full stack (builds the app image, waits for health checks)
 up:
@@ -48,3 +48,15 @@ enqueue:
 # Get job status — usage: make status id=<job-id>
 status:
 	curl -s http://localhost:8080/api/jobs/$(id) | jq .
+
+# List jobs — usage: make list, make list state=FAILED
+list:
+	@if [ -n "$(state)" ]; then \
+		curl -s "http://localhost:8080/api/jobs?state=$(state)&limit=20" | jq .; \
+	else \
+		curl -s "http://localhost:8080/api/jobs?limit=20" | jq .; \
+	fi
+
+# Health probes
+ready:
+	curl -s http://localhost:8080/ready | jq .
