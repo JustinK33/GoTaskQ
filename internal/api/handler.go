@@ -31,7 +31,7 @@ func NewHandler(queue Queue, jobs store.JobStore, logger zerolog.Logger, reg *me
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
-	router.Use(h.metricsMiddleware())
+	router.Use(RequestID(h.Logger), RequestLogger(), h.metricsMiddleware())
 	g := router.Group("/api/jobs")
 	g.POST("", h.EnqueueJob)
 	g.GET("/:id", h.GetJobStatus)
