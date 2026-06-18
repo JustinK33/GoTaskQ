@@ -133,12 +133,15 @@ func run(ctx context.Context) error {
 	})
 
 	runner := &jobWorker{
-		store:   jobStore,
-		lockMgr: lockMgr,
-		breaker: breaker,
-		retry:   retryEngine,
-		metrics: reg,
-		log:     logger.WithComponent(log, "worker"),
+		store:    jobStore,
+		lockMgr:  lockMgr,
+		breaker:  breaker,
+		retry:    retryEngine,
+		metrics:  reg,
+		log:      logger.WithComponent(log, "worker"),
+		kafka:    kafkaClient,
+		topic:    cfg.Kafka.Topic,
+		handlers: defaultHandlers(),
 	}
 	workerPool := worker.NewPool(worker.Config{
 		Concurrency:     cfg.Worker.Concurrency,
@@ -202,18 +205,56 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// jobWorker implements worker.JobRunner. It wraps execution with a distributed lock,
-// circuit breaker, and retry policy so the pool itself stays transport-agnostic.
-type jobWorker struct {
-	store   store.JobStore
-	lockMgr *lock.Manager
-	breaker *circuitbreaker.Breaker
-	retry   *retry.Engine
-	metrics *metrics.Registry
-	log     zerolog.Logger
+// TaskHandler is the application-side function executed for a job.
+type TaskHandler func(context.Context, models.Job) error
+
+// defaultHandlers returns the registry of task handlers. Add new entries here
+// to wire up real task logic; jobs whose Task.Name is unregistered fail with
+// retry.ErrNoRetry so they go straight to DEAD instead of looping forever.
+func defaultHandlers() map[string]TaskHandler {
+	return map[string]TaskHandler{}
 }
 
+// jobWorker implements worker.JobRunner. It wraps execution with a distributed lock,
+// circuit breaker, retry policy, and per-job timeout.
+type jobWorker struct {
+	store    store.JobStore
+	lockMgr  *lock.Manager
+	breaker  *circuitbreaker.Breaker
+	retry    *retry.Engine
+	metrics  *metrics.Registry
+	log      zerolog.Logger
+	kafka    service.Publisher
+	topic    string
+	handlers map[string]TaskHandler
+}
+
+// maxInWorkerSleep caps how long a worker will block waiting for a job's
+// scheduled_at. Longer than this and we drop back to the queue rather than
+// hold the worker slot.
+const maxInWorkerSleep = 60 * time.Second
+
 func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
+	// Honor scheduled_at so retry backoff actually delays execution.
+	if job.ScheduledAt != nil {
+		if wait := time.Until(*job.ScheduledAt); wait > 0 {
+			if wait > maxInWorkerSleep {
+				// Re-publish so the slot frees up; another consumer will pick
+				// it up after Kafka redelivery and the math will be smaller.
+				jw.log.Debug().Str("job_id", job.ID).Dur("wait", wait).Msg("scheduled too far ahead, re-publishing")
+				if err := jw.kafka.Publish(ctx, jw.topic, job); err != nil {
+					jw.log.Warn().Err(err).Str("job_id", job.ID).Msg("re-publish failed")
+				}
+				return nil
+			}
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
 	if !jw.breaker.Allow() {
 		jw.log.Warn().Str("job_id", job.ID).Msg("circuit open, skipping execution")
 		return nil
@@ -227,6 +268,16 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 		return nil
 	}
 	defer jw.lockMgr.Release(ctx, lck) //nolint:errcheck
+
+	// Move PENDING → RUNNING and stamp started_at.
+	now := time.Now().UTC()
+	job.Attempt++
+	job.State = models.JobStateRunning
+	job.StartedAt = &now
+	if err := jw.store.UpdateJob(ctx, job); err != nil {
+		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to mark job running")
+		return err
+	}
 
 	jw.metrics.WorkerInFlight.Inc()
 	start := time.Now()
@@ -242,31 +293,17 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 		jw.metrics.JobFailed.Inc()
 
 		if jw.retry.ShouldRetry(job.Attempt, err) {
-			job.State = models.JobStateFailed
-			job.LastError = err.Error()
-			job.Task.RetryCount++
-			if updateErr := jw.store.UpdateJob(ctx, job); updateErr != nil {
-				jw.log.Error().Err(updateErr).Str("job_id", job.ID).Msg("failed to record retry state")
-			}
-			return err
+			return jw.scheduleRetry(ctx, job, err)
 		}
-
-		// Retries exhausted — move to dead-letter queue.
-		job.State = models.JobStateDead
-		job.LastError = err.Error()
-		if updateErr := jw.store.UpdateJob(ctx, job); updateErr != nil {
-			jw.log.Error().Err(updateErr).Str("job_id", job.ID).Msg("failed to dead-letter job")
-		}
-		jw.log.Error().Err(err).Str("job_id", job.ID).Int("attempts", job.Attempt).Msg("job exhausted retries")
-		return err
+		return jw.deadLetter(ctx, job, err)
 	}
 
 	jw.breaker.RecordSuccess()
 	jw.metrics.JobCompleted.Inc()
 
-	now := time.Now().UTC()
+	completedAt := time.Now().UTC()
 	job.State = models.JobStateCompleted
-	job.CompletedAt = &now
+	job.CompletedAt = &completedAt
 	if err := jw.store.UpdateJob(ctx, job); err != nil {
 		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to mark job complete")
 		return err
@@ -274,11 +311,70 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 	return nil
 }
 
-// execute is where task handlers plug in. A real deployment would look up
-// job.Task.Name in a handler registry here; left as a no-op to keep the
-// queue/store/worker machinery decoupled from application logic.
-func (jw *jobWorker) execute(_ context.Context, _ models.Job) error {
-	return nil
+// execute looks up a registered handler for job.Task.Name and runs it under
+// the per-task timeout if one is set. Unknown task names short-circuit with
+// retry.ErrNoRetry so they don't burn through the retry budget.
+func (jw *jobWorker) execute(ctx context.Context, job models.Job) error {
+	handler, ok := jw.handlers[job.Task.Name]
+	if !ok {
+		return fmt.Errorf("worker: no handler registered for task %q: %w", job.Task.Name, retry.ErrNoRetry)
+	}
+
+	if job.Task.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, job.Task.Timeout)
+		defer cancel()
+	}
+	return handler(ctx, job)
+}
+
+// scheduleRetry transitions RUNNING → FAILED → PENDING, stamps scheduled_at
+// with the next attempt's backoff, and re-publishes to Kafka so a worker
+// (possibly this one, possibly another) picks it up after the delay.
+func (jw *jobWorker) scheduleRetry(ctx context.Context, job models.Job, runErr error) error {
+	delay := jw.retry.Delay(job.Attempt)
+	nextRun := time.Now().UTC().Add(delay)
+
+	// RUNNING → FAILED
+	job.State = models.JobStateFailed
+	job.LastError = runErr.Error()
+	if err := jw.store.UpdateJob(ctx, job); err != nil {
+		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to record retry state")
+		return runErr
+	}
+
+	// FAILED → PENDING with future scheduled_at
+	job.State = models.JobStatePending
+	job.ScheduledAt = &nextRun
+	job.StartedAt = nil
+	if err := jw.store.UpdateJob(ctx, job); err != nil {
+		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to reschedule retry")
+		return runErr
+	}
+
+	if err := jw.kafka.Publish(ctx, jw.topic, job); err != nil {
+		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to re-publish retry; will be reconciled on next ClaimNextJob")
+	}
+
+	jw.log.Warn().
+		Err(runErr).
+		Str("job_id", job.ID).
+		Int("attempt", job.Attempt).
+		Dur("retry_in", delay).
+		Msg("scheduled retry")
+	return runErr
+}
+
+// deadLetter transitions RUNNING → DEAD when retries are exhausted or the
+// error is permanent (errors.Is(err, retry.ErrNoRetry)).
+func (jw *jobWorker) deadLetter(ctx context.Context, job models.Job, runErr error) error {
+	job.State = models.JobStateDead
+	job.LastError = runErr.Error()
+	if err := jw.store.UpdateJob(ctx, job); err != nil {
+		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to dead-letter job")
+	}
+	jw.log.Error().Err(runErr).Str("job_id", job.ID).Int("attempts", job.Attempt).Msg("job exhausted retries")
+	return runErr
 }
 
 // kafkaJobHandler bridges Kafka messages to the worker pool.
