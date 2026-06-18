@@ -3,6 +3,9 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"net/http"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -59,6 +62,32 @@ func RequestLogger() gin.HandlerFunc {
 			Dur("latency", time.Since(start)).
 			Str("client_ip", c.ClientIP()).
 			Msg("http_request")
+	}
+}
+
+// Recovery catches panics in handlers and emits a structured zerolog Error
+// event with the recovered value and stack trace, then responds 500 with
+// the standard error envelope. Replaces gin.Recovery() which writes its
+// stack to gin's own io.Writer and bypasses the structured log pipeline.
+func Recovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				log := zerolog.Ctx(c.Request.Context())
+				log.Error().
+					Interface("panic", r).
+					Bytes("stack", debug.Stack()).
+					Str("method", c.Request.Method).
+					Str("path", c.Request.URL.Path).
+					Msg("panic recovered")
+
+				if !c.Writer.Written() {
+					RespondError(c, http.StatusInternalServerError, "internal_error", fmt.Sprintf("panic: %v", r))
+				}
+				c.Abort()
+			}
+		}()
+		c.Next()
 	}
 }
 

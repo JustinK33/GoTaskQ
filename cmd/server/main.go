@@ -165,7 +165,8 @@ func run(ctx context.Context) error {
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.Recovery())
+	// Recovery is installed by api.RegisterRoutes so it can use the same
+	// request-scoped logger as the other middlewares.
 
 	handler := api.NewHandler(jobSvc, jobStore, logger.WithComponent(log, "api"), reg)
 	handler.RegisterRoutes(router)

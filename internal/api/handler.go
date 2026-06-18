@@ -31,7 +31,7 @@ func NewHandler(queue Queue, jobs store.JobStore, logger zerolog.Logger, reg *me
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
-	router.Use(RequestID(h.Logger), RequestLogger(), h.metricsMiddleware())
+	router.Use(RequestID(h.Logger), RequestLogger(), Recovery(), h.metricsMiddleware())
 	g := router.Group("/api/jobs")
 	g.POST("", h.EnqueueJob)
 	g.GET("/:id", h.GetJobStatus)
@@ -50,21 +50,23 @@ func (h *Handler) metricsMiddleware() gin.HandlerFunc {
 }
 
 func (h *Handler) EnqueueJob(c *gin.Context) {
+	log := zerolog.Ctx(c.Request.Context())
+
 	var job models.Job
 	if err := c.ShouldBindJSON(&job); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
 	if job.Task.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "task.name is required"})
+		RespondError(c, http.StatusBadRequest, "invalid_request", "task.name is required")
 		return
 	}
 
 	id, err := h.Queue.Enqueue(c.Request.Context(), job)
 	if err != nil {
-		h.Logger.Error().Err(err).Msg("enqueue failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue job"})
+		log.Error().Err(err).Msg("enqueue failed")
+		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to enqueue job")
 		return
 	}
 
@@ -73,16 +75,17 @@ func (h *Handler) EnqueueJob(c *gin.Context) {
 }
 
 func (h *Handler) GetJobStatus(c *gin.Context) {
+	log := zerolog.Ctx(c.Request.Context())
 	id := c.Param("id")
 
 	job, err := h.Store.GetJob(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+			RespondError(c, http.StatusNotFound, "not_found", "job not found")
 			return
 		}
-		h.Logger.Error().Err(err).Str("job_id", id).Msg("get job failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve job"})
+		log.Error().Err(err).Str("job_id", id).Msg("get job failed")
+		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to retrieve job")
 		return
 	}
 
@@ -90,15 +93,20 @@ func (h *Handler) GetJobStatus(c *gin.Context) {
 }
 
 func (h *Handler) CancelJob(c *gin.Context) {
+	log := zerolog.Ctx(c.Request.Context())
 	id := c.Param("id")
 
 	if err := h.Queue.Cancel(c.Request.Context(), id); err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+			RespondError(c, http.StatusNotFound, "not_found", "job not found")
 			return
 		}
-		h.Logger.Error().Err(err).Str("job_id", id).Msg("cancel failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel job"})
+		if errors.Is(err, store.ErrInvalidTransition) {
+			RespondError(c, http.StatusConflict, "invalid_state", "job cannot be cancelled in its current state")
+			return
+		}
+		log.Error().Err(err).Str("job_id", id).Msg("cancel failed")
+		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to cancel job")
 		return
 	}
 
