@@ -38,7 +38,9 @@ func NewPool(cfg Config, runner JobRunner) *Pool {
 }
 
 func (p *Pool) Start(ctx context.Context) {
+	p.wg.Add(1)
 	go func() {
+		defer p.wg.Done()
 		for {
 			select {
 			case job, ok := <-p.jobs:
