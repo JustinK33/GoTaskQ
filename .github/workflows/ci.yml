@@ -58,6 +58,7 @@ jobs:
   load-test:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -80,9 +81,7 @@ jobs:
 
       - name: Start infrastructure
         run: |
-          docker compose up -d kafka redis redis-2 redis-3 postgres
-          echo "Waiting for Postgres..."
-          until docker exec gotaskq-postgres-1 pg_isready -U gotaskq 2>/dev/null; do sleep 2; done
+          docker compose up -d --wait kafka redis redis-2 redis-3 postgres
           docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
 
       - name: Start server
@@ -102,8 +101,23 @@ jobs:
           HTTP_ADDRESS: ":8080"
         run: |
           nohup bin/server > /tmp/server.log 2>&1 &
-          echo "Waiting for server..."
-          until curl -sf http://localhost:8080/health; do sleep 1; done
+          echo $! > /tmp/server.pid
+          echo "Waiting for server (max 90s)..."
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/health >/dev/null; then
+              echo "server up after ${i}s"
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/server.pid)" 2>/dev/null; then
+              echo "server process exited"
+              cat /tmp/server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "server did not become healthy in 90s"
+          cat /tmp/server.log
+          exit 1
 
       - name: Run k6 load test
         uses: grafana/k6-action@v0.3.1
@@ -114,4 +128,4 @@ jobs:
 
       - name: Server logs (on failure)
         if: failure()
-        run: cat /tmp/server.log
+        run: cat /tmp/server.log || true
