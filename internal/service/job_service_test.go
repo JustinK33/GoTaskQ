@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/example/gotaskq/internal/store"
 	"github.com/example/gotaskq/pkg/models"
@@ -12,9 +14,12 @@ import (
 
 // mockStore satisfies store.JobStore with controllable responses.
 type mockStore struct {
-	createErr  error
-	cancelErr  error
-	createdJob models.Job
+	createErr         error
+	cancelErr         error
+	createdJob        models.Job
+	idempotencyJob    models.Job
+	idempotencyLookup error
+	idempotencyCalls  int
 }
 
 func (m *mockStore) CreateJob(_ context.Context, job models.Job) error {
@@ -23,8 +28,20 @@ func (m *mockStore) CreateJob(_ context.Context, job models.Job) error {
 }
 func (m *mockStore) UpdateJob(_ context.Context, _ models.Job) error        { return nil }
 func (m *mockStore) GetJob(_ context.Context, _ string) (models.Job, error) { return models.Job{}, nil }
-func (m *mockStore) CancelJob(_ context.Context, _ string) error        { return m.cancelErr }
-func (m *mockStore) ClaimNextJob(_ context.Context) (models.Job, error) { return models.Job{}, nil }
+func (m *mockStore) GetJobByIdempotencyKey(_ context.Context, _ string) (models.Job, error) {
+	m.idempotencyCalls++
+	if m.createErr == store.ErrDuplicateIdempotencyKey && m.idempotencyCalls > 1 {
+		return m.idempotencyJob, nil
+	}
+	return m.idempotencyJob, m.idempotencyLookup
+}
+func (m *mockStore) CancelJob(_ context.Context, _ string) error { return m.cancelErr }
+func (m *mockStore) ClaimNextJob(_ context.Context, _ time.Duration) (models.Job, error) {
+	return models.Job{}, nil
+}
+func (m *mockStore) RenewLease(context.Context, models.Job, time.Duration) error { return nil }
+func (m *mockStore) RequeueExpiredRunning(context.Context, int) (int, error)     { return 0, nil }
+func (m *mockStore) ReleaseClaim(context.Context, models.Job, string) error      { return nil }
 func (m *mockStore) ListJobs(context.Context, store.ListFilter) ([]models.Job, string, error) {
 	return nil, "", nil
 }
@@ -32,10 +49,28 @@ func (m *mockStore) ListJobs(context.Context, store.ListFilter) ([]models.Job, s
 // mockPublisher satisfies Publisher with controllable responses.
 type mockPublisher struct {
 	publishErr error
+	mu         sync.Mutex
+	published  int
+	publishedC chan struct{}
 }
 
 func (m *mockPublisher) Publish(_ context.Context, _ string, _ models.Job) error {
+	m.mu.Lock()
+	m.published++
+	m.mu.Unlock()
+	if m.publishedC != nil {
+		select {
+		case m.publishedC <- struct{}{}:
+		default:
+		}
+	}
 	return m.publishErr
+}
+
+func (m *mockPublisher) publishedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.published
 }
 
 func newTestService(s *mockStore, p *mockPublisher) *JobService {
@@ -85,6 +120,100 @@ func TestEnqueueStoreError(t *testing.T) {
 	}
 	if !errors.Is(err, storeErr) {
 		t.Errorf("error chain does not contain store error; got %v", err)
+	}
+}
+
+func TestEnqueueDoesNotPublishFutureScheduledJob(t *testing.T) {
+	ms := &mockStore{}
+	publisher := &mockPublisher{publishedC: make(chan struct{}, 1)}
+	svc := newTestService(ms, publisher)
+	future := time.Now().UTC().Add(time.Hour)
+
+	_, err := svc.Enqueue(context.Background(), models.Job{
+		Task:        models.Task{Name: "send-email"},
+		ScheduledAt: &future,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-publisher.publishedC:
+		t.Fatal("future scheduled job was published immediately")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if publisher.publishedCount() != 0 {
+		t.Fatalf("published count = %d, want 0", publisher.publishedCount())
+	}
+}
+
+func TestEnqueueReturnsExistingJobForIdempotencyKey(t *testing.T) {
+	ms := &mockStore{
+		idempotencyJob:    models.Job{ID: "existing-job"},
+		idempotencyLookup: nil,
+	}
+	publisher := &mockPublisher{publishedC: make(chan struct{}, 1)}
+	svc := newTestService(ms, publisher)
+
+	id, err := svc.Enqueue(context.Background(), models.Job{
+		IdempotencyKey: "request-1",
+		Task:           models.Task{Name: "send-email"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "existing-job" {
+		t.Fatalf("id = %q, want existing-job", id)
+	}
+	if ms.createdJob.ID != "" {
+		t.Fatalf("created new job on duplicate idempotency key: %#v", ms.createdJob)
+	}
+	if publisher.publishedCount() != 0 {
+		t.Fatalf("published count = %d, want 0", publisher.publishedCount())
+	}
+}
+
+func TestEnqueueReturnsExistingJobAfterDuplicateIdempotencyRace(t *testing.T) {
+	ms := &mockStore{
+		createErr:         store.ErrDuplicateIdempotencyKey,
+		idempotencyJob:    models.Job{ID: "existing-job"},
+		idempotencyLookup: store.ErrJobNotFound,
+	}
+	publisher := &mockPublisher{publishedC: make(chan struct{}, 1)}
+	svc := newTestService(ms, publisher)
+
+	id, err := svc.Enqueue(context.Background(), models.Job{
+		IdempotencyKey: "request-1",
+		Task:           models.Task{Name: "send-email"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "existing-job" {
+		t.Fatalf("id = %q, want existing-job", id)
+	}
+	if publisher.publishedCount() != 0 {
+		t.Fatalf("published count = %d, want 0", publisher.publishedCount())
+	}
+}
+
+func TestEnqueuePublishesDueJob(t *testing.T) {
+	ms := &mockStore{}
+	publisher := &mockPublisher{publishedC: make(chan struct{}, 1)}
+	svc := newTestService(ms, publisher)
+
+	_, err := svc.Enqueue(context.Background(), models.Job{Task: models.Task{Name: "send-email"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-publisher.publishedC:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for due job publish")
+	}
+	if publisher.publishedCount() != 1 {
+		t.Fatalf("published count = %d, want 1", publisher.publishedCount())
 	}
 }
 

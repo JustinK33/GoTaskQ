@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/example/gotaskq/internal/metrics"
 	"github.com/example/gotaskq/internal/store"
@@ -26,6 +27,13 @@ type Handler struct {
 	Metrics *metrics.Registry
 }
 
+type EnqueueRequest struct {
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	Task           models.Task       `json:"task"`
+	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+}
+
 func NewHandler(queue Queue, jobs store.JobStore, logger zerolog.Logger, reg *metrics.Registry) *Handler {
 	return &Handler{Queue: queue, Store: jobs, Logger: logger, Metrics: reg}
 }
@@ -35,6 +43,7 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	g := router.Group("/api/jobs")
 	g.POST("", h.EnqueueJob)
 	g.GET("", h.ListJobs)
+	g.GET("/by-idempotency-key/:key", h.GetJobByIdempotencyKey)
 	g.GET("/:id", h.GetJobStatus)
 	g.POST("/:id/cancel", h.CancelJob)
 }
@@ -53,15 +62,22 @@ func (h *Handler) metricsMiddleware() gin.HandlerFunc {
 func (h *Handler) EnqueueJob(c *gin.Context) {
 	log := zerolog.Ctx(c.Request.Context())
 
-	var job models.Job
-	if err := c.ShouldBindJSON(&job); err != nil {
+	var request EnqueueRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
 		RespondError(c, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
-	if job.Task.Name == "" {
+	if request.Task.Name == "" {
 		RespondError(c, http.StatusBadRequest, "invalid_request", "task.name is required")
 		return
+	}
+
+	job := models.Job{
+		IdempotencyKey: request.IdempotencyKey,
+		Task:           request.Task,
+		ScheduledAt:    request.ScheduledAt,
+		Metadata:       request.Metadata,
 	}
 
 	id, err := h.Queue.Enqueue(c.Request.Context(), job)
@@ -86,6 +102,28 @@ func (h *Handler) GetJobStatus(c *gin.Context) {
 			return
 		}
 		log.Error().Err(err).Str("job_id", id).Msg("get job failed")
+		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to retrieve job")
+		return
+	}
+
+	c.JSON(http.StatusOK, job)
+}
+
+func (h *Handler) GetJobByIdempotencyKey(c *gin.Context) {
+	log := zerolog.Ctx(c.Request.Context())
+	key := c.Param("key")
+	if key == "" {
+		RespondError(c, http.StatusBadRequest, "invalid_request", "idempotency key is required")
+		return
+	}
+
+	job, err := h.Store.GetJobByIdempotencyKey(c.Request.Context(), key)
+	if err != nil {
+		if errors.Is(err, store.ErrJobNotFound) {
+			RespondError(c, http.StatusNotFound, "not_found", "job not found")
+			return
+		}
+		log.Error().Err(err).Str("idempotency_key", key).Msg("get job by idempotency key failed")
 		RespondError(c, http.StatusInternalServerError, "internal_error", "failed to retrieve job")
 		return
 	}

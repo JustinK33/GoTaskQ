@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS jobs (
     -- Identity
     id                  TEXT        PRIMARY KEY,
+    idempotency_key     TEXT,
 
     -- Task fields (flattened from models.Task)
     task_id             TEXT        NOT NULL,
@@ -25,6 +26,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- Timestamps (nullable = not yet reached that lifecycle stage)
     scheduled_at        TIMESTAMPTZ,
     started_at          TIMESTAMPTZ,
+    lease_expires_at    TIMESTAMPTZ,
+    lease_token         TEXT,
     completed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -37,3 +40,21 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_pending_idx
     ON jobs (scheduled_at ASC)
     WHERE state = 'PENDING';
+
+-- Prevents duplicate job creation when clients retry enqueue calls.
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency_key_idx
+    ON jobs (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+-- Speeds up stale RUNNING lease recovery.
+CREATE INDEX IF NOT EXISTS jobs_running_lease_idx
+    ON jobs (lease_expires_at ASC)
+    WHERE state = 'RUNNING';
+
+-- Speeds up unfiltered keyset pagination in ListJobs.
+CREATE INDEX IF NOT EXISTS jobs_created_idx
+    ON jobs (created_at DESC, id DESC);
+
+-- Speeds up state-filtered keyset pagination in ListJobs.
+CREATE INDEX IF NOT EXISTS jobs_state_created_idx
+    ON jobs (state, created_at DESC, id DESC);

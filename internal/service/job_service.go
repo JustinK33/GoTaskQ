@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,6 +30,16 @@ func NewJobService(kafka Publisher, s store.JobStore, topic string, log zerolog.
 }
 
 func (s *JobService) Enqueue(ctx context.Context, job models.Job) (string, error) {
+	if job.IdempotencyKey != "" {
+		existing, err := s.store.GetJobByIdempotencyKey(ctx, job.IdempotencyKey)
+		if err == nil {
+			return existing.ID, nil
+		}
+		if !errors.Is(err, store.ErrJobNotFound) {
+			return "", fmt.Errorf("service: lookup idempotency key: %w", err)
+		}
+	}
+
 	if job.ID == "" {
 		id, err := newJobID()
 		if err != nil {
@@ -45,17 +56,26 @@ func (s *JobService) Enqueue(ctx context.Context, job models.Job) (string, error
 	}
 
 	if err := s.store.CreateJob(ctx, job); err != nil {
+		if errors.Is(err, store.ErrDuplicateIdempotencyKey) && job.IdempotencyKey != "" {
+			existing, lookupErr := s.store.GetJobByIdempotencyKey(ctx, job.IdempotencyKey)
+			if lookupErr != nil {
+				return "", fmt.Errorf("service: lookup duplicate idempotency key: %w", lookupErr)
+			}
+			return existing.ID, nil
+		}
 		return "", fmt.Errorf("service: persist job: %w", err)
 	}
 
-	// Postgres is source of truth. Kafka is best-effort — the scheduler picks
-	// up anything that never got consumed.
-	go func() {
-		if err := s.kafka.Publish(context.Background(), s.topic, job); err != nil {
-			s.log.Warn().Err(err).Str("job_id", job.ID).
-				Msg("service: async kafka publish failed; job remains PENDING for reconciliation")
-		}
-	}()
+	if shouldPublishImmediately(job, now) {
+		// Postgres is source of truth. Kafka is best-effort; the reconciler
+		// picks up anything that never got consumed.
+		go func() {
+			if err := s.kafka.Publish(context.Background(), s.topic, job); err != nil {
+				s.log.Warn().Err(err).Str("job_id", job.ID).
+					Msg("service: async kafka publish failed; job remains PENDING for reconciliation")
+			}
+		}()
+	}
 
 	return job.ID, nil
 }
@@ -77,4 +97,8 @@ func newJobID() (string, error) {
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:]), nil
+}
+
+func shouldPublishImmediately(job models.Job, now time.Time) bool {
+	return job.ScheduledAt == nil || !job.ScheduledAt.After(now)
 }

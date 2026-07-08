@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/example/gotaskq/pkg/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 )
@@ -21,12 +24,16 @@ type JobStore interface {
 	CreateJob(context.Context, models.Job) error
 	UpdateJob(context.Context, models.Job) error
 	GetJob(context.Context, string) (models.Job, error)
+	GetJobByIdempotencyKey(context.Context, string) (models.Job, error)
 	CancelJob(context.Context, string) error
-	ClaimNextJob(context.Context) (models.Job, error)
+	ClaimNextJob(context.Context, time.Duration) (models.Job, error)
+	RenewLease(context.Context, models.Job, time.Duration) error
+	RequeueExpiredRunning(context.Context, int) (int, error)
+	ReleaseClaim(context.Context, models.Job, string) error
 	ListJobs(context.Context, ListFilter) ([]models.Job, string, error)
 }
 
-// ListFilter narrows a ListJobs call. State is optional — empty string means
+// ListFilter narrows a ListJobs call. State is optional - empty string means
 // any state. Cursor is the opaque token returned by the previous page; pass
 // empty string for the first page. Limit is capped server-side.
 type ListFilter struct {
@@ -62,19 +69,20 @@ func (s *PostgresStore) CreateJob(ctx context.Context, job models.Job) error {
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s (
-			id, task_id, task_name, task_payload,
+			id, idempotency_key, task_id, task_name, task_payload,
 			task_retry_count, task_max_retries, task_timeout_ns,
 			task_cron_expr, task_queue, task_metadata,
 			state, attempt, last_error,
-			scheduled_at, started_at, completed_at,
+			scheduled_at, started_at, lease_expires_at, lease_token, completed_at,
 			created_at, updated_at, metadata
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-			$11,$12,$13,$14,$15,$16,$17,$18,$19
+			$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
 		)`, s.TableName)
 
 	_, err = s.Pool.Exec(ctx, query,
 		job.ID,
+		nullableString(job.IdempotencyKey),
 		job.Task.ID,
 		job.Task.Name,
 		job.Task.Payload,
@@ -89,26 +97,52 @@ func (s *PostgresStore) CreateJob(ctx context.Context, job models.Job) error {
 		job.LastError,
 		job.ScheduledAt,
 		job.StartedAt,
+		job.LeaseExpiresAt,
+		nullableString(job.LeaseToken),
 		job.CompletedAt,
 		job.CreatedAt,
 		job.UpdatedAt,
 		metaBytes,
 	)
+	if isIdempotencyUniqueViolation(err) {
+		return ErrDuplicateIdempotencyKey
+	}
 	return err
 }
 
 func (s *PostgresStore) GetJob(ctx context.Context, id string) (models.Job, error) {
 	query := fmt.Sprintf(`
 		SELECT
-			id, task_id, task_name, task_payload,
+			id, idempotency_key, task_id, task_name, task_payload,
 			task_retry_count, task_max_retries, task_timeout_ns,
 			task_cron_expr, task_queue, task_metadata,
 			state, attempt, last_error,
-			scheduled_at, started_at, completed_at,
+			scheduled_at, started_at, lease_expires_at, lease_token, completed_at,
 			created_at, updated_at, metadata
 		FROM %s WHERE id = $1`, s.TableName)
 
 	job, err := scanJob(ctx, s.Pool.QueryRow(ctx, query, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.Job{}, ErrJobNotFound
+		}
+		return models.Job{}, err
+	}
+	return job, nil
+}
+
+func (s *PostgresStore) GetJobByIdempotencyKey(ctx context.Context, key string) (models.Job, error) {
+	query := fmt.Sprintf(`
+		SELECT
+			id, idempotency_key, task_id, task_name, task_payload,
+			task_retry_count, task_max_retries, task_timeout_ns,
+			task_cron_expr, task_queue, task_metadata,
+			state, attempt, last_error,
+			scheduled_at, started_at, lease_expires_at, lease_token, completed_at,
+			created_at, updated_at, metadata
+		FROM %s WHERE idempotency_key = $1`, s.TableName)
+
+	job, err := scanJob(ctx, s.Pool.QueryRow(ctx, query, key))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.Job{}, ErrJobNotFound
@@ -145,12 +179,22 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) error {
 			last_error       = $3,
 			scheduled_at     = $4,
 			started_at       = $5,
-			completed_at     = $6,
-			updated_at       = $7,
-			metadata         = $8,
-			task_metadata    = $9,
-			task_retry_count = $10
-		WHERE id = $11`, s.TableName)
+			lease_expires_at = $6,
+			lease_token      = CASE
+				WHEN $1 IN ('COMPLETED', 'DEAD', 'PENDING') THEN NULL
+				ELSE $7
+			END,
+			completed_at     = $8,
+			updated_at       = $9,
+			metadata         = $10,
+			task_metadata    = $11,
+			task_retry_count = $12
+		WHERE id = $13
+		  AND (
+			$14 = ''
+			OR lease_token = $14
+			OR (state = 'PENDING' AND $1 = 'RUNNING' AND lease_token IS NULL)
+		  )`, s.TableName)
 
 	tag, err := s.Pool.Exec(ctx, query,
 		string(job.State),
@@ -158,18 +202,21 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, job models.Job) error {
 		job.LastError,
 		job.ScheduledAt,
 		job.StartedAt,
+		job.LeaseExpiresAt,
+		nullableString(job.LeaseToken),
 		job.CompletedAt,
 		job.UpdatedAt,
 		metaBytes,
 		taskMetaBytes,
 		job.Task.RetryCount,
 		job.ID,
+		job.LeaseToken,
 	)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrJobNotFound
+		return ErrInvalidTransition
 	}
 	return nil
 }
@@ -192,44 +239,135 @@ func (s *PostgresStore) CancelJob(ctx context.Context, id string) error {
 	return err
 }
 
-// ClaimNextJob atomically selects the next PENDING job and marks it RUNNING,
-// using SELECT … FOR UPDATE SKIP LOCKED so concurrent workers don't double-claim.
-func (s *PostgresStore) ClaimNextJob(ctx context.Context) (models.Job, error) {
-	tx, err := s.Pool.Begin(ctx)
+// ClaimNextJob atomically selects the next due PENDING job and marks it RUNNING,
+// using SELECT FOR UPDATE SKIP LOCKED so concurrent workers don't double-claim.
+func (s *PostgresStore) ClaimNextJob(ctx context.Context, leaseDuration time.Duration) (models.Job, error) {
+	now := time.Now().UTC()
+	leaseExpiresAt := now.Add(leaseDuration)
+	leaseToken, err := newLeaseToken()
 	if err != nil {
-		return models.Job{}, err
+		return models.Job{}, fmt.Errorf("store: generate lease token: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
 
-	selectQ := fmt.Sprintf(`
-		SELECT id FROM %s
-		WHERE state = 'PENDING'
-		ORDER BY scheduled_at ASC NULLS LAST
-		LIMIT 1
-		FOR UPDATE SKIP LOCKED`, s.TableName)
+	query := fmt.Sprintf(`
+		WITH selected AS (
+			SELECT id
+			FROM %s
+			WHERE state = 'PENDING'
+			  AND (scheduled_at IS NULL OR scheduled_at <= NOW())
+			ORDER BY scheduled_at ASC NULLS LAST
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE %s jobs
+		SET state = 'RUNNING',
+			attempt = jobs.attempt + 1,
+			started_at = $1,
+			lease_expires_at = $2,
+			lease_token = $3,
+			updated_at = $4
+		FROM selected
+		WHERE jobs.id = selected.id
+		RETURNING
+			jobs.id, jobs.idempotency_key, jobs.task_id, jobs.task_name, jobs.task_payload,
+			jobs.task_retry_count, jobs.task_max_retries, jobs.task_timeout_ns,
+			jobs.task_cron_expr, jobs.task_queue, jobs.task_metadata,
+			jobs.state, jobs.attempt, jobs.last_error,
+			jobs.scheduled_at, jobs.started_at, jobs.lease_expires_at, jobs.lease_token, jobs.completed_at,
+			jobs.created_at, jobs.updated_at, jobs.metadata`, s.TableName, s.TableName)
 
-	var id string
-	if err := tx.QueryRow(ctx, selectQ).Scan(&id); err != nil {
+	job, err := scanJob(ctx, s.Pool.QueryRow(ctx, query, now, leaseExpiresAt, leaseToken, now))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.Job{}, ErrJobNotFound
 		}
 		return models.Job{}, err
 	}
+	return job, nil
+}
 
-	now := time.Now().UTC()
-	updateQ := fmt.Sprintf(
-		`UPDATE %s SET state = 'RUNNING', started_at = $1, updated_at = $2 WHERE id = $3`,
-		s.TableName,
-	)
-	if _, err := tx.Exec(ctx, updateQ, now, now, id); err != nil {
-		return models.Job{}, err
+func (s *PostgresStore) RenewLease(ctx context.Context, job models.Job, leaseDuration time.Duration) error {
+	if job.LeaseToken == "" {
+		return ErrInvalidTransition
 	}
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET lease_expires_at = $1,
+			updated_at = NOW()
+		WHERE id = $2
+		  AND state = 'RUNNING'
+		  AND lease_token = $3`, s.TableName)
 
-	if err := tx.Commit(ctx); err != nil {
-		return models.Job{}, err
+	tag, err := s.Pool.Exec(ctx, query, time.Now().UTC().Add(leaseDuration), job.ID, job.LeaseToken)
+	if err != nil {
+		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidTransition
+	}
+	return nil
+}
 
-	return s.GetJob(ctx, id)
+func (s *PostgresStore) RequeueExpiredRunning(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	query := fmt.Sprintf(`
+		WITH expired AS (
+			SELECT id, attempt, task_max_retries
+			FROM %s
+			WHERE state = 'RUNNING'
+			  AND lease_expires_at IS NOT NULL
+			  AND lease_expires_at <= NOW()
+			ORDER BY lease_expires_at ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE %s jobs
+		SET state = CASE
+				WHEN expired.task_max_retries > 0 AND expired.attempt >= expired.task_max_retries THEN 'DEAD'
+				ELSE 'PENDING'
+			END,
+			last_error = 'job lease expired before completion',
+			scheduled_at = CASE
+				WHEN expired.task_max_retries > 0 AND expired.attempt >= expired.task_max_retries THEN scheduled_at
+				ELSE NOW()
+			END,
+			started_at = NULL,
+			lease_expires_at = NULL,
+			lease_token = NULL,
+			updated_at = NOW()
+		FROM expired
+		WHERE jobs.id = expired.id`, s.TableName, s.TableName)
+
+	tag, err := s.Pool.Exec(ctx, query, limit)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func (s *PostgresStore) ReleaseClaim(ctx context.Context, job models.Job, reason string) error {
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET state = 'PENDING',
+			last_error = $1,
+			started_at = NULL,
+			lease_expires_at = NULL,
+			lease_token = NULL,
+			updated_at = NOW()
+		WHERE id = $2
+		  AND state = 'RUNNING'
+		  AND lease_token = $3`, s.TableName)
+
+	tag, err := s.Pool.Exec(ctx, query, reason, job.ID, job.LeaseToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 // ListJobs returns up to filter.Limit jobs ordered by created_at DESC, id DESC,
@@ -269,11 +407,11 @@ func (s *PostgresStore) ListJobs(ctx context.Context, filter ListFilter) ([]mode
 
 	query := fmt.Sprintf(`
 		SELECT
-			id, task_id, task_name, task_payload,
+			id, idempotency_key, task_id, task_name, task_payload,
 			task_retry_count, task_max_retries, task_timeout_ns,
 			task_cron_expr, task_queue, task_metadata,
 			state, attempt, last_error,
-			scheduled_at, started_at, completed_at,
+			scheduled_at, started_at, lease_expires_at, lease_token, completed_at,
 			created_at, updated_at, metadata
 		FROM %s
 		WHERE %s
@@ -320,6 +458,7 @@ func scanJob(ctx context.Context, row pgx.Row) (models.Job, error) {
 
 	err := row.Scan(
 		&job.ID,
+		&job.IdempotencyKey,
 		&job.Task.ID,
 		&job.Task.Name,
 		&job.Task.Payload,
@@ -334,6 +473,8 @@ func scanJob(ctx context.Context, row pgx.Row) (models.Job, error) {
 		&job.LastError,
 		&job.ScheduledAt,
 		&job.StartedAt,
+		&job.LeaseExpiresAt,
+		&job.LeaseToken,
 		&job.CompletedAt,
 		&job.CreatedAt,
 		&job.UpdatedAt,
@@ -357,6 +498,28 @@ func scanJob(ctx context.Context, row pgx.Row) (models.Job, error) {
 		}
 	}
 	return job, nil
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func newLeaseToken() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func isIdempotencyUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "jobs_idempotency_key_idx"
 }
 
 func encodeCursor(t time.Time, id string) string {

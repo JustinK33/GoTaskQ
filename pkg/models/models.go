@@ -28,17 +28,20 @@ type Task struct {
 
 // Job is the durable execution record that moves through the state machine.
 type Job struct {
-	ID          string            `json:"id"`
-	Task        Task              `json:"task"`
-	State       JobState          `json:"state"`
-	Attempt     int               `json:"attempt"`
-	ScheduledAt *time.Time        `json:"scheduled_at,omitempty"`
-	StartedAt   *time.Time        `json:"started_at,omitempty"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
-	LastError   string            `json:"last_error,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID             string            `json:"id"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	Task           Task              `json:"task"`
+	State          JobState          `json:"state"`
+	Attempt        int               `json:"attempt"`
+	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`
+	StartedAt      *time.Time        `json:"started_at,omitempty"`
+	LeaseExpiresAt *time.Time        `json:"lease_expires_at,omitempty"`
+	LeaseToken     string            `json:"lease_token,omitempty"`
+	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
+	LastError      string            `json:"last_error,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 type HTTPConfig struct {
@@ -90,6 +93,14 @@ type SchedulerConfig struct {
 	MaxConcurrentRuns int
 }
 
+type ReconcilerConfig struct {
+	Enabled      bool
+	Interval     time.Duration
+	IdleInterval time.Duration
+	BatchSize    int
+	RunningLease time.Duration
+}
+
 type MetricsConfig struct {
 	Namespace     string
 	Subsystem     string
@@ -105,13 +116,21 @@ type LoggerConfig struct {
 	AddCaller   bool
 }
 
+type WebhookConfig struct {
+	Timeout              time.Duration
+	MaxRedirects         int
+	AllowPrivateNetworks bool
+}
+
 type Config struct {
-	HTTP      HTTPConfig
-	Kafka     KafkaConfig
-	Redis     RedisConfig
-	Postgres  PostgresConfig
-	Worker    WorkerConfig
-	Scheduler SchedulerConfig
-	Metrics   MetricsConfig
-	Logger    LoggerConfig
+	HTTP       HTTPConfig
+	Kafka      KafkaConfig
+	Redis      RedisConfig
+	Postgres   PostgresConfig
+	Worker     WorkerConfig
+	Scheduler  SchedulerConfig
+	Reconciler ReconcilerConfig
+	Metrics    MetricsConfig
+	Logger     LoggerConfig
+	Webhook    WebhookConfig
 }

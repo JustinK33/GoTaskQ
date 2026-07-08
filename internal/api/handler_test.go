@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/example/gotaskq/internal/metrics"
 	"github.com/example/gotaskq/internal/store"
@@ -39,19 +40,41 @@ func (m mockQueue) Enqueue(context.Context, models.Job) (string, error) {
 }
 func (m mockQueue) Cancel(context.Context, string) error { return m.cancelErr }
 
-// mockStore satisfies store.JobStore with controllable responses.
-type mockStore struct {
-	job    models.Job
-	getErr error
+type spyQueue struct {
+	enqueueID string
+	job       models.Job
 }
 
-func (m mockStore) CreateJob(context.Context, models.Job) error        { return nil }
-func (m mockStore) UpdateJob(context.Context, models.Job) error        { return nil }
+func (s *spyQueue) Enqueue(_ context.Context, job models.Job) (string, error) {
+	s.job = job
+	return s.enqueueID, nil
+}
+
+func (s *spyQueue) Cancel(context.Context, string) error { return nil }
+
+// mockStore satisfies store.JobStore with controllable responses.
+type mockStore struct {
+	job               models.Job
+	getErr            error
+	idempotencyJob    models.Job
+	idempotencyGetErr error
+}
+
+func (m mockStore) CreateJob(context.Context, models.Job) error { return nil }
+func (m mockStore) UpdateJob(context.Context, models.Job) error { return nil }
 func (m mockStore) GetJob(_ context.Context, _ string) (models.Job, error) {
 	return m.job, m.getErr
 }
-func (m mockStore) CancelJob(context.Context, string) error          { return nil }
-func (m mockStore) ClaimNextJob(context.Context) (models.Job, error) { return models.Job{}, nil }
+func (m mockStore) GetJobByIdempotencyKey(context.Context, string) (models.Job, error) {
+	return m.idempotencyJob, m.idempotencyGetErr
+}
+func (m mockStore) CancelJob(context.Context, string) error { return nil }
+func (m mockStore) ClaimNextJob(context.Context, time.Duration) (models.Job, error) {
+	return models.Job{}, nil
+}
+func (m mockStore) RenewLease(context.Context, models.Job, time.Duration) error { return nil }
+func (m mockStore) RequeueExpiredRunning(context.Context, int) (int, error)     { return 0, nil }
+func (m mockStore) ReleaseClaim(context.Context, models.Job, string) error      { return nil }
 func (m mockStore) ListJobs(context.Context, store.ListFilter) ([]models.Job, string, error) {
 	return nil, "", nil
 }
@@ -137,6 +160,49 @@ func TestEnqueueJob(t *testing.T) {
 	}
 }
 
+func TestEnqueueJobIgnoresServerOwnedFields(t *testing.T) {
+	queue := &spyQueue{enqueueID: "created-job"}
+	h := NewHandler(queue, mockStore{}, zerolog.Logger{}, testRegistry())
+	router := gin.New()
+	h.RegisterRoutes(router)
+
+	body := `{
+		"id":"caller-job",
+		"state":"COMPLETED",
+		"attempt":99,
+		"started_at":"2026-01-01T00:00:00Z",
+		"idempotency_key":"request-1",
+		"task":{"name":"send-email","queue":"default"},
+		"metadata":{"source":"test"}
+	}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if queue.job.ID != "" {
+		t.Fatalf("job ID reached queue = %q, want empty", queue.job.ID)
+	}
+	if queue.job.State != "" {
+		t.Fatalf("job state reached queue = %q, want empty", queue.job.State)
+	}
+	if queue.job.Attempt != 0 {
+		t.Fatalf("job attempt reached queue = %d, want 0", queue.job.Attempt)
+	}
+	if queue.job.StartedAt != nil {
+		t.Fatal("started_at reached queue, want nil")
+	}
+	if queue.job.IdempotencyKey != "request-1" {
+		t.Fatalf("idempotency key = %q, want request-1", queue.job.IdempotencyKey)
+	}
+	if queue.job.Metadata["source"] != "test" {
+		t.Fatalf("metadata not preserved: %#v", queue.job.Metadata)
+	}
+}
+
 func TestGetJobStatus(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -169,6 +235,52 @@ func TestGetJobStatus(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/jobs/"+tc.jobID, nil)
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestGetJobByIdempotencyKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		store      mockStore
+		wantStatus int
+	}{
+		{
+			name: "found job returns 200",
+			key:  "request-1",
+			store: mockStore{
+				idempotencyJob: models.Job{
+					ID:             "job-1",
+					IdempotencyKey: "request-1",
+					State:          models.JobStatePending,
+				},
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "missing job returns 404",
+			key:  "missing",
+			store: mockStore{
+				idempotencyGetErr: store.ErrJobNotFound,
+			},
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHandler(mockQueue{}, tc.store, zerolog.Logger{}, testRegistry())
+			router := gin.New()
+			h.RegisterRoutes(router)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/jobs/by-idempotency-key/"+tc.key, nil)
 			router.ServeHTTP(w, req)
 
 			if w.Code != tc.wantStatus {

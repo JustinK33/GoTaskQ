@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/example/gotaskq/pkg/models"
 )
@@ -69,6 +70,26 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvironmentReadsWebhookConfig(t *testing.T) {
+	cfg, err := LoadFromEnvironment(mockEnvironment{values: map[string]string{
+		"WEBHOOK_TIMEOUT":                "3s",
+		"WEBHOOK_MAX_REDIRECTS":          "2",
+		"WEBHOOK_ALLOW_PRIVATE_NETWORKS": "true",
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Webhook.Timeout != 3*time.Second {
+		t.Fatalf("webhook timeout = %s, want 3s", cfg.Webhook.Timeout)
+	}
+	if cfg.Webhook.MaxRedirects != 2 {
+		t.Fatalf("webhook max redirects = %d, want 2", cfg.Webhook.MaxRedirects)
+	}
+	if !cfg.Webhook.AllowPrivateNetworks {
+		t.Fatal("webhook allow private networks = false, want true")
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -83,20 +104,21 @@ func TestValidate(t *testing.T) {
 		{
 			name: "config with required fields is valid",
 			cfg: models.Config{
-				HTTP:    models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
-				Kafka:   models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
+				HTTP:     models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
+				Kafka:    models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
 				Postgres: models.PostgresConfig{DSN: "postgres://localhost/gotaskq"},
-				Worker:  models.WorkerConfig{Concurrency: 4, QueueSize: 32},
+				Worker:   models.WorkerConfig{Concurrency: 4, QueueSize: 32},
+				Webhook:  models.WebhookConfig{Timeout: time.Second},
 			},
 			wantErr: false,
 		},
 		{
 			name: "zero worker concurrency is invalid",
 			cfg: models.Config{
-				HTTP:    models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
-				Kafka:   models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
+				HTTP:     models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
+				Kafka:    models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
 				Postgres: models.PostgresConfig{DSN: "postgres://localhost/gotaskq"},
-				Worker:  models.WorkerConfig{Concurrency: 0, QueueSize: 32},
+				Worker:   models.WorkerConfig{Concurrency: 0, QueueSize: 32},
 			},
 			wantErr: true,
 		},

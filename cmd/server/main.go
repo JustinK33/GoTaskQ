@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,10 +22,12 @@ import (
 	"github.com/example/gotaskq/internal/logger"
 	"github.com/example/gotaskq/internal/metrics"
 	"github.com/example/gotaskq/internal/queue"
+	"github.com/example/gotaskq/internal/reconciler"
 	"github.com/example/gotaskq/internal/retry"
 	"github.com/example/gotaskq/internal/scheduler"
 	"github.com/example/gotaskq/internal/service"
 	"github.com/example/gotaskq/internal/store"
+	"github.com/example/gotaskq/internal/webhook"
 	"github.com/example/gotaskq/internal/worker"
 	"github.com/example/gotaskq/pkg/models"
 	"github.com/gin-gonic/gin"
@@ -139,9 +144,8 @@ func run(ctx context.Context) error {
 		retry:    retryEngine,
 		metrics:  reg,
 		log:      logger.WithComponent(log, "worker"),
-		kafka:    kafkaClient,
-		topic:    cfg.Kafka.Topic,
-		handlers: defaultHandlers(),
+		handlers: defaultHandlers(cfg.Webhook),
+		lease:    cfg.Reconciler.RunningLease,
 	}
 	workerPool := worker.NewPool(worker.Config{
 		Concurrency:     cfg.Worker.Concurrency,
@@ -149,6 +153,17 @@ func run(ctx context.Context) error {
 		ShutdownTimeout: cfg.Worker.ShutdownTimeout,
 	}, runner)
 	workerPool.Start(ctx)
+
+	jobReconciler := reconciler.New(reconciler.Config{
+		Interval:     cfg.Reconciler.Interval,
+		IdleInterval: cfg.Reconciler.IdleInterval,
+		BatchSize:    cfg.Reconciler.BatchSize,
+		RunningLease: cfg.Reconciler.RunningLease,
+	}, jobStore, workerPool, logger.WithComponent(log, "reconciler"))
+	if cfg.Reconciler.Enabled {
+		jobReconciler.Start(ctx)
+	}
+	defer jobReconciler.Stop()
 
 	go func() {
 		h := &kafkaJobHandler{pool: workerPool, log: logger.WithComponent(log, "consumer")}
@@ -175,7 +190,7 @@ func run(ctx context.Context) error {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	router.GET("/ready", readinessHandler(pgPool, redisClients, log))
-	// /health kept for backward compat — same as /live.
+	// /health kept for backward compat - same as /live.
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -204,6 +219,7 @@ func run(ctx context.Context) error {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Warn().Err(err).Msg("HTTP server shutdown")
 	}
+	jobReconciler.Stop()
 	if err := workerPool.Stop(shutCtx); err != nil {
 		log.Warn().Err(err).Msg("worker pool drain timeout")
 	}
@@ -217,8 +233,15 @@ type TaskHandler func(context.Context, models.Job) error
 // defaultHandlers returns the registry of task handlers. Add new entries here
 // to wire up real task logic; jobs whose Task.Name is unregistered fail with
 // retry.ErrNoRetry so they go straight to DEAD instead of looping forever.
-func defaultHandlers() map[string]TaskHandler {
-	return map[string]TaskHandler{}
+func defaultHandlers(cfg models.WebhookConfig) map[string]TaskHandler {
+	webhookExecutor := webhook.NewExecutorWithConfig(webhook.Config{
+		Timeout:              cfg.Timeout,
+		MaxRedirects:         cfg.MaxRedirects,
+		AllowPrivateNetworks: cfg.AllowPrivateNetworks,
+	})
+	return map[string]TaskHandler{
+		webhook.TaskName(): webhookExecutor.Handler,
+	}
 }
 
 // jobWorker implements worker.JobRunner. It wraps execution with a distributed lock,
@@ -230,14 +253,12 @@ type jobWorker struct {
 	retry    *retry.Engine
 	metrics  *metrics.Registry
 	log      zerolog.Logger
-	kafka    service.Publisher
-	topic    string
 	handlers map[string]TaskHandler
+	lease    time.Duration
 }
 
-// maxInWorkerSleep caps how long a worker will block waiting for a job's
-// scheduled_at. Longer than this and we drop back to the queue rather than
-// hold the worker slot.
+// maxInWorkerSleep caps how long a worker will block waiting for scheduled_at.
+// Longer waits are left in Postgres for the reconciler instead of holding a slot.
 const maxInWorkerSleep = 60 * time.Second
 
 func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
@@ -245,12 +266,7 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 	if job.ScheduledAt != nil {
 		if wait := time.Until(*job.ScheduledAt); wait > 0 {
 			if wait > maxInWorkerSleep {
-				// Re-publish so the slot frees up; another consumer will pick
-				// it up after Kafka redelivery and the math will be smaller.
-				jw.log.Debug().Str("job_id", job.ID).Dur("wait", wait).Msg("scheduled too far ahead, re-publishing")
-				if err := jw.kafka.Publish(ctx, jw.topic, job); err != nil {
-					jw.log.Warn().Err(err).Str("job_id", job.ID).Msg("re-publish failed")
-				}
+				jw.log.Debug().Str("job_id", job.ID).Dur("wait", wait).Msg("scheduled too far ahead, leaving for reconciler")
 				return nil
 			}
 			select {
@@ -263,6 +279,7 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 
 	if !jw.breaker.Allow() {
 		jw.log.Warn().Str("job_id", job.ID).Msg("circuit open, skipping execution")
+		jw.releaseClaim(ctx, job, "circuit open")
 		return nil
 	}
 
@@ -271,18 +288,29 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 	lck, err := jw.lockMgr.Acquire(ctx, "job:exec:"+job.ID)
 	if err != nil {
 		jw.log.Warn().Err(err).Str("job_id", job.ID).Msg("could not acquire execution lock")
+		jw.releaseClaim(ctx, job, "could not acquire execution lock")
 		return nil
 	}
 	defer jw.lockMgr.Release(ctx, lck) //nolint:errcheck
 
-	// Move PENDING → RUNNING and stamp started_at.
-	now := time.Now().UTC()
-	job.Attempt++
-	job.State = models.JobStateRunning
-	job.StartedAt = &now
-	if err := jw.store.UpdateJob(ctx, job); err != nil {
-		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to mark job running")
-		return err
+	if job.State != models.JobStateRunning {
+		// Kafka-delivered jobs arrive as PENDING and are claimed here. The
+		// reconciler path already claims them in Postgres before submitting.
+		now := time.Now().UTC()
+		leaseToken, err := newWorkerLeaseToken()
+		if err != nil {
+			return fmt.Errorf("worker: generate lease token: %w", err)
+		}
+		leaseExpiresAt := now.Add(jw.effectiveLease())
+		job.Attempt++
+		job.State = models.JobStateRunning
+		job.StartedAt = &now
+		job.LeaseExpiresAt = &leaseExpiresAt
+		job.LeaseToken = leaseToken
+		if err := jw.store.UpdateJob(ctx, job); err != nil {
+			jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to mark job running")
+			return err
+		}
 	}
 
 	jw.metrics.WorkerInFlight.Inc()
@@ -294,11 +322,14 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 
 	jw.metrics.JobStarted.Inc()
 
+	stopRenewLease := jw.startLeaseRenewal(ctx, job)
+	defer stopRenewLease()
+
 	if err := jw.execute(ctx, job); err != nil {
 		jw.breaker.RecordFailure()
 		jw.metrics.JobFailed.Inc()
 
-		if jw.retry.ShouldRetry(job.Attempt, err) {
+		if jw.shouldRetry(job, err) {
 			return jw.scheduleRetry(ctx, job, err)
 		}
 		return jw.deadLetter(ctx, job, err)
@@ -310,11 +341,65 @@ func (jw *jobWorker) Run(ctx context.Context, job models.Job) error {
 	completedAt := time.Now().UTC()
 	job.State = models.JobStateCompleted
 	job.CompletedAt = &completedAt
+	job.LeaseExpiresAt = nil
 	if err := jw.store.UpdateJob(ctx, job); err != nil {
 		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to mark job complete")
 		return err
 	}
 	return nil
+}
+
+func (jw *jobWorker) startLeaseRenewal(ctx context.Context, job models.Job) func() {
+	if job.State != models.JobStateRunning || job.LeaseToken == "" {
+		return func() {}
+	}
+
+	lease := jw.effectiveLease()
+	interval := lease / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+
+	renewCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				if err := jw.store.RenewLease(renewCtx, job, lease); err != nil {
+					jw.log.Warn().Err(err).Str("job_id", job.ID).Msg("failed to renew job lease")
+					return
+				}
+				timer.Reset(interval)
+			case <-renewCtx.Done():
+				return
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (jw *jobWorker) effectiveLease() time.Duration {
+	if jw.lease > 0 {
+		return jw.lease
+	}
+	return 5 * time.Minute
+}
+
+func (jw *jobWorker) releaseClaim(ctx context.Context, job models.Job, reason string) {
+	if job.State != models.JobStateRunning || job.LeaseToken == "" {
+		return
+	}
+	if err := jw.store.ReleaseClaim(ctx, job, reason); err != nil {
+		jw.log.Warn().Err(err).Str("job_id", job.ID).Msg("failed to release claimed job")
+	}
 }
 
 // execute looks up a registered handler for job.Task.Name and runs it under
@@ -334,14 +419,21 @@ func (jw *jobWorker) execute(ctx context.Context, job models.Job) error {
 	return handler(ctx, job)
 }
 
-// scheduleRetry transitions RUNNING → FAILED → PENDING, stamps scheduled_at
-// with the next attempt's backoff, and re-publishes to Kafka so a worker
-// (possibly this one, possibly another) picks it up after the delay.
+func (jw *jobWorker) shouldRetry(job models.Job, err error) bool {
+	if job.Task.MaxRetries > 0 {
+		return !errors.Is(err, retry.ErrNoRetry) && job.Attempt < job.Task.MaxRetries
+	}
+	return jw.retry.ShouldRetry(job.Attempt, err)
+}
+
+// scheduleRetry transitions RUNNING to FAILED to PENDING and stamps scheduled_at
+// with the next attempt's backoff. The reconciler dispatches the job when it
+// becomes due.
 func (jw *jobWorker) scheduleRetry(ctx context.Context, job models.Job, runErr error) error {
 	delay := jw.retry.Delay(job.Attempt)
 	nextRun := time.Now().UTC().Add(delay)
 
-	// RUNNING → FAILED
+	// RUNNING to FAILED.
 	job.State = models.JobStateFailed
 	job.LastError = runErr.Error()
 	if err := jw.store.UpdateJob(ctx, job); err != nil {
@@ -349,17 +441,14 @@ func (jw *jobWorker) scheduleRetry(ctx context.Context, job models.Job, runErr e
 		return runErr
 	}
 
-	// FAILED → PENDING with future scheduled_at
+	// FAILED to PENDING with future scheduled_at.
 	job.State = models.JobStatePending
 	job.ScheduledAt = &nextRun
 	job.StartedAt = nil
+	job.LeaseExpiresAt = nil
 	if err := jw.store.UpdateJob(ctx, job); err != nil {
 		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to reschedule retry")
 		return runErr
-	}
-
-	if err := jw.kafka.Publish(ctx, jw.topic, job); err != nil {
-		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to re-publish retry; will be reconciled on next ClaimNextJob")
 	}
 
 	jw.log.Warn().
@@ -376,6 +465,7 @@ func (jw *jobWorker) scheduleRetry(ctx context.Context, job models.Job, runErr e
 func (jw *jobWorker) deadLetter(ctx context.Context, job models.Job, runErr error) error {
 	job.State = models.JobStateDead
 	job.LastError = runErr.Error()
+	job.LeaseExpiresAt = nil
 	if err := jw.store.UpdateJob(ctx, job); err != nil {
 		jw.log.Error().Err(err).Str("job_id", job.ID).Msg("failed to dead-letter job")
 	}
@@ -386,8 +476,30 @@ func (jw *jobWorker) deadLetter(ctx context.Context, job models.Job, runErr erro
 // readinessHandler verifies the service can actually serve traffic by pinging
 // each downstream. Postgres is required; Redis is required to quorum (>= N/2+1
 // nodes responding) since the lock manager depends on it.
+const readinessCacheTTL = 2 * time.Second
+
+type readinessSnapshot struct {
+	status  int
+	body    gin.H
+	expires time.Time
+}
+
 func readinessHandler(pg *pgxpool.Pool, redisClients []redis.UniversalClient, log zerolog.Logger) gin.HandlerFunc {
+	var mu sync.Mutex
+	var snapshot readinessSnapshot
+
 	return func(c *gin.Context) {
+		now := time.Now()
+		mu.Lock()
+		if !snapshot.expires.IsZero() && now.Before(snapshot.expires) {
+			status := snapshot.status
+			body := snapshot.body
+			mu.Unlock()
+			c.JSON(status, body)
+			return
+		}
+		mu.Unlock()
+
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 
@@ -421,7 +533,15 @@ func readinessHandler(pg *pgxpool.Pool, redisClients []redis.UniversalClient, lo
 			status = http.StatusServiceUnavailable
 			log.Warn().Interface("checks", checks).Msg("readiness probe failed")
 		}
-		c.JSON(status, gin.H{"status": map[bool]string{true: "ready", false: "not_ready"}[ok], "checks": checks})
+		body := gin.H{"status": map[bool]string{true: "ready", false: "not_ready"}[ok], "checks": checks}
+		mu.Lock()
+		snapshot = readinessSnapshot{
+			status:  status,
+			body:    body,
+			expires: now.Add(readinessCacheTTL),
+		}
+		mu.Unlock()
+		c.JSON(status, body)
 	}
 }
 
@@ -438,7 +558,16 @@ func (h *kafkaJobHandler) Handle(ctx context.Context, msg *sarama.ConsumerMessag
 		return nil
 	}
 	if !h.pool.Submit(ctx, job) {
-		h.log.Warn().Str("job_id", job.ID).Msg("worker pool full, job dropped")
+		h.log.Warn().Str("job_id", job.ID).Msg("worker pool full, leaving kafka message uncommitted")
+		return fmt.Errorf("worker pool full")
 	}
 	return nil
+}
+
+func newWorkerLeaseToken() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }

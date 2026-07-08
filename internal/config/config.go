@@ -30,7 +30,7 @@ func Default() models.Config {
 		},
 		Kafka: models.KafkaConfig{
 			Brokers:           []string{"localhost:9092"},
-			Topic:             "jobs",
+			Topic:             "gotaskq.jobs",
 			ConsumerGroup:     "gotaskq-workers",
 			ClientID:          "gotaskq",
 			RequiredAcks:      1,
@@ -46,22 +46,29 @@ func Default() models.Config {
 		},
 		Postgres: models.PostgresConfig{
 			DSN:               "postgres://postgres:postgres@localhost:5432/gotaskq?sslmode=disable",
-			MaxConns:          50,
-			MinConns:          10,
+			MaxConns:          10,
+			MinConns:          1,
 			MigrationsPath:    "migrations",
 			MaxConnLifetime:   30 * time.Minute,
 			MaxConnIdleTime:   5 * time.Minute,
 			HealthCheckPeriod: time.Minute,
 		},
 		Worker: models.WorkerConfig{
-			Concurrency:     50,
-			QueueSize:       500,
+			Concurrency:     8,
+			QueueSize:       256,
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Scheduler: models.SchedulerConfig{
 			Enabled:           true,
 			TickInterval:      time.Minute,
 			MaxConcurrentRuns: 5,
+		},
+		Reconciler: models.ReconcilerConfig{
+			Enabled:      true,
+			Interval:     time.Second,
+			IdleInterval: 15 * time.Second,
+			BatchSize:    100,
+			RunningLease: 5 * time.Minute,
 		},
 		Metrics: models.MetricsConfig{
 			Namespace:     "gotaskq",
@@ -74,6 +81,11 @@ func Default() models.Config {
 			ServiceName: "gotaskq",
 			Environment: "development",
 		},
+		Webhook: models.WebhookConfig{
+			Timeout:              10 * time.Second,
+			MaxRedirects:         0,
+			AllowPrivateNetworks: false,
+		},
 	}
 }
 
@@ -82,7 +94,7 @@ func Load() (models.Config, error) {
 }
 
 // LoadFromEnvironment merges defaults with values pulled from env. Empty or
-// unparseable values fall through to the default rather than erroring — only
+// unparseable values fall through to the default rather than erroring - only
 // Validate enforces required fields.
 func LoadFromEnvironment(env Environment) (models.Config, error) {
 	cfg := Default()
@@ -125,6 +137,12 @@ func LoadFromEnvironment(env Environment) (models.Config, error) {
 	p.dur("SCHEDULER_TICK_INTERVAL", &cfg.Scheduler.TickInterval)
 	p.intv("SCHEDULER_MAX_CONCURRENT_RUNS", &cfg.Scheduler.MaxConcurrentRuns)
 
+	p.boolv("RECONCILER_ENABLED", &cfg.Reconciler.Enabled)
+	p.dur("RECONCILER_INTERVAL", &cfg.Reconciler.Interval)
+	p.dur("RECONCILER_IDLE_INTERVAL", &cfg.Reconciler.IdleInterval)
+	p.intv("RECONCILER_BATCH_SIZE", &cfg.Reconciler.BatchSize)
+	p.dur("RECONCILER_RUNNING_LEASE", &cfg.Reconciler.RunningLease)
+
 	p.str("METRICS_NAMESPACE", &cfg.Metrics.Namespace)
 	p.str("METRICS_SUBSYSTEM", &cfg.Metrics.Subsystem)
 	p.str("METRICS_LISTEN_ADDRESS", &cfg.Metrics.ListenAddress)
@@ -135,6 +153,10 @@ func LoadFromEnvironment(env Environment) (models.Config, error) {
 	p.str("LOG_ENVIRONMENT", &cfg.Logger.Environment)
 	p.boolv("LOG_PRETTY", &cfg.Logger.Pretty)
 	p.boolv("LOG_ADD_CALLER", &cfg.Logger.AddCaller)
+
+	p.dur("WEBHOOK_TIMEOUT", &cfg.Webhook.Timeout)
+	p.intv("WEBHOOK_MAX_REDIRECTS", &cfg.Webhook.MaxRedirects)
+	p.boolv("WEBHOOK_ALLOW_PRIVATE_NETWORKS", &cfg.Webhook.AllowPrivateNetworks)
 
 	return cfg, Validate(cfg)
 }
@@ -151,6 +173,12 @@ func Validate(cfg models.Config) error {
 	}
 	if cfg.Worker.Concurrency <= 0 {
 		return fmt.Errorf("config: WORKER_CONCURRENCY must be > 0, got %d", cfg.Worker.Concurrency)
+	}
+	if cfg.Webhook.Timeout <= 0 {
+		return fmt.Errorf("config: WEBHOOK_TIMEOUT must be > 0, got %s", cfg.Webhook.Timeout)
+	}
+	if cfg.Webhook.MaxRedirects < 0 {
+		return fmt.Errorf("config: WEBHOOK_MAX_REDIRECTS must be >= 0, got %d", cfg.Webhook.MaxRedirects)
 	}
 	return nil
 }

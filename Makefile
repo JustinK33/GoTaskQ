@@ -39,17 +39,21 @@ build:
 tidy:
 	go mod tidy
 
-# Enqueue a sample job (stack must be running)
+# Enqueue a webhook job - usage: make enqueue url=https://example.com/webhook
 enqueue:
+	@if [ -z "$(url)" ]; then \
+		echo "usage: make enqueue url=https://example.com/webhook"; \
+		exit 2; \
+	fi
 	curl -s -X POST http://localhost:8080/api/jobs \
 		-H "Content-Type: application/json" \
-		-d '{"task":{"name":"example","payload":"aGVsbG8="}}' | jq .
+		-d '{"idempotency_key":"sample-webhook-job","task":{"name":"webhook","payload":"aGVsbG8=","metadata":{"url":"$(url)"}}}' | jq .
 
-# Get job status — usage: make status id=<job-id>
+# Get job status - usage: make status id=<job-id>
 status:
 	curl -s http://localhost:8080/api/jobs/$(id) | jq .
 
-# List jobs — usage: make list, make list state=FAILED
+# List jobs - usage: make list, make list state=FAILED
 list:
 	@if [ -n "$(state)" ]; then \
 		curl -s "http://localhost:8080/api/jobs?state=$(state)&limit=20" | jq .; \

@@ -81,6 +81,19 @@ func (p *Pool) Submit(ctx context.Context, job models.Job) bool {
 	}
 }
 
+// SubmitBlocking waits until the queue accepts the job or ctx is cancelled.
+func (p *Pool) SubmitBlocking(ctx context.Context, job models.Job) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case p.jobs <- job:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // Stop closes the queue and waits for in-flight work, bounded by ctx.
 func (p *Pool) Stop(ctx context.Context) error {
 	close(p.jobs)

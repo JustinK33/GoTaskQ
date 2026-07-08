@@ -14,8 +14,16 @@ type mockJobStore struct{}
 func (mockJobStore) CreateJob(context.Context, models.Job) error        { return nil }
 func (mockJobStore) UpdateJob(context.Context, models.Job) error        { return nil }
 func (mockJobStore) GetJob(context.Context, string) (models.Job, error) { return models.Job{}, nil }
-func (mockJobStore) CancelJob(context.Context, string) error            { return nil }
-func (mockJobStore) ClaimNextJob(context.Context) (models.Job, error)   { return models.Job{}, nil }
+func (mockJobStore) GetJobByIdempotencyKey(context.Context, string) (models.Job, error) {
+	return models.Job{}, nil
+}
+func (mockJobStore) CancelJob(context.Context, string) error { return nil }
+func (mockJobStore) ClaimNextJob(context.Context, time.Duration) (models.Job, error) {
+	return models.Job{}, nil
+}
+func (mockJobStore) RenewLease(context.Context, models.Job, time.Duration) error { return nil }
+func (mockJobStore) RequeueExpiredRunning(context.Context, int) (int, error)     { return 0, nil }
+func (mockJobStore) ReleaseClaim(context.Context, models.Job, string) error      { return nil }
 
 func TestNewPostgresStore(t *testing.T) {
 	t.Run("captures pool and table name", func(t *testing.T) {
