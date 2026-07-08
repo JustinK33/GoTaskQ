@@ -74,15 +74,16 @@ against the same topic.
                         │  5. UpdateJob → COMPLETED/FAILED/DEAD  │
                         └───────────────────────────────────────┘
 
-Parallel path — Scheduler (reconciliation):
+Parallel path - Reconciler:
 
                         ┌───────────────────────────────────────┐
-                        │            Scheduler                   │
-                        │      (scheduler/scheduler.go)          │
+                        │            Reconciler                  │
+                        │     (reconciler/reconciler.go)         │
                         │                                        │
-                        │  5-field cron expression parser        │
-                        │  tick loop → dispatch()                │
-                        │  fires registered JobFunc callbacks    │
+                        │  adaptive tick loop                    │
+                        │  claims due PENDING jobs               │
+                        │  recovers expired RUNNING leases       │
+                        │  submits work to Worker Pool           │
                         └───────────────────────────────────────┘
 ```
 
@@ -99,7 +100,7 @@ Parallel path — Scheduler (reconciliation):
 ```
 
 `CanTransition` in `store/store.go` guards every `UpdateJob` call. Illegal
-transitions return `ErrInvalidTransition` — no silent state corruption.
+transitions return `ErrInvalidTransition` - no silent state corruption.
 
 ---
 
@@ -125,19 +126,19 @@ Metrics middleware counts requests by method / path / status.
 ### `internal/service`
 `JobService` is the glue between the HTTP layer and the store + Kafka. It writes
 to Postgres first (that's the commit), then publishes to Kafka in a goroutine.
-Kafka being down doesn't fail the caller — the job sits PENDING until the
-scheduler or a reconnected consumer picks it up.
+Kafka being down doesn't fail the caller.
+The job sits PENDING until the reconciler claims it or a reconnected consumer picks it up.
 
 ### `internal/store`
 `PostgresStore` with a pgx pool. The interesting bit is `ClaimNextJob`:
 `SELECT ... FOR UPDATE SKIP LOCKED` lets multiple instances poll without
-stepping on each other — each grabs a distinct row or moves on immediately.
+stepping on each other - each grabs a distinct row or moves on immediately.
 No queue manager needed.
 
 ### `internal/queue`
 Thin Sarama wrapper. Exposes a `Publisher` interface so `JobService` doesn't
 import the concrete type (easier to mock in tests). Consumer marks offsets only
-after successful dispatch — at-least-once delivery.
+after successful dispatch - at-least-once delivery.
 
 ### `internal/circuitbreaker`
 Three-state FSM: Closed → Open → Half-Open → Closed. `jobWorker` calls
@@ -148,18 +149,22 @@ is allowed per `OpenTimeout` to test recovery.
 ### `internal/lock`
 Redlock over 3 independent Redis nodes. Lock key is `job:exec:<id>`. Quorum
 is 2/3; if we can't get it, another instance already has the job. Release is
-a Lua script — checks the token atomically before deleting so a slow worker
+a Lua script - checks the token atomically before deleting so a slow worker
 can't steal an expired lock it no longer owns.
 
 ### `internal/retry`
-Exponential backoff with proportional jitter. The cap is applied twice — once
-before jitter, once after — so `MaxDelay` is actually a ceiling regardless of
+Exponential backoff with proportional jitter. The cap is applied twice - once
+before jitter, once after - so `MaxDelay` is actually a ceiling regardless of
 the jitter factor. `ErrNoRetry` skips remaining attempts for permanent failures.
 
 ### `internal/scheduler`
 Tick-based cron runner with a built-in 5-field parser. No external dependency.
-Mainly acts as a reconciler: anything that fell through the Kafka cracks
-(broker downtime, unclean shutdown) gets a second chance here.
+It handles cron-style scheduled callbacks only.
+
+### `internal/reconciler`
+Adaptive Postgres-backed recovery loop.
+It claims due PENDING jobs, submits them to the worker pool, and recovers expired RUNNING leases.
+When the queue is idle, it backs off to a slower polling interval to reduce steady-state database load.
 
 ### `internal/metrics`
 Prometheus counters and histograms registered at startup:
@@ -191,7 +196,8 @@ crosses a package boundary lives here so import cycles stay impossible.
 Kafka topics have configurable retention. A job that sits PENDING for a week
 might fall off the log. Postgres doesn't have that problem, and `FOR UPDATE
 SKIP LOCKED` gives us work-stealing semantics for free. Kafka is just the fast
-path for getting work to workers quickly — if it's down, the scheduler covers.
+path for getting work to workers quickly.
+If Kafka is down, the reconciler covers due jobs from Postgres.
 
 ### Why Redlock instead of a single Redis node?
 A single-node lock has an obvious failure mode: the node goes down between
@@ -223,7 +229,7 @@ keeping it in-tree means we control the `Next()` behavior for tests.
 | Metrics | [Prometheus](https://prometheus.io/) + [Grafana](https://grafana.com/) |
 | Logging | [zerolog](https://github.com/rs/zerolog) |
 | Infra | Docker Compose (local), Kubernetes (`deploy/k8s/`) |
-| CI | GitHub Actions — test → build → k6 load test |
+| CI | GitHub Actions - test to build to k6 load test |
 
 ---
 
@@ -279,6 +285,7 @@ GoTaskQ/
 │   ├── logger/             # zerolog setup
 │   ├── metrics/            # Prometheus collectors
 │   ├── queue/              # Kafka client
+│   ├── reconciler/         # Postgres-backed due-job and lease recovery
 │   ├── retry/              # backoff engine
 │   ├── scheduler/          # cron scheduler
 │   ├── service/            # JobService

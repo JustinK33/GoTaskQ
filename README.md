@@ -31,11 +31,11 @@ git clone https://github.com/JustinK33/GoTaskQ.git && cd GoTaskQ
 # 2. Copy the env file (defaults work with Docker Compose out of the box)
 cp .env.example .env
 
-# 3. Start the full stack — waits for all health checks before starting the app
+# 3. Start the full stack - waits for all health checks before starting the app
 make up
 
-# 4. Enqueue a job
-make enqueue
+# 4. Enqueue a webhook job
+make enqueue url=https://example.com/webhook
 # {"id": "5c8058ea-40d6-49f5-9547-cfb37426b368"}
 
 # 5. Check its status
@@ -52,9 +52,14 @@ All endpoints are under `http://localhost:8080`.
 curl -X POST http://localhost:8080/api/jobs \
   -H "Content-Type: application/json" \
   -d '{
+    "idempotency_key": "send-email-user-123",
     "task": {
-      "name": "send-email",
-      "payload": "eyJ0byI6InVzZXJAZXhhbXBsZS5jb20ifQ=="
+      "name": "webhook",
+      "payload": "eyJ0byI6InVzZXJAZXhhbXBsZS5jb20ifQ==",
+      "metadata": {
+        "url": "https://example.com/webhook",
+        "method": "POST"
+      }
     }
   }'
 ```
@@ -96,6 +101,15 @@ curl http://localhost:8080/api/jobs/<id>
 }
 ```
 
+### Get a job by idempotency key
+
+```bash
+curl http://localhost:8080/api/jobs/by-idempotency-key/send-email-user-123
+```
+
+Use this when a client retried an enqueue request and only has the original `idempotency_key`.
+The response is the same job object returned by `GET /api/jobs/<id>`.
+
 ### Cancel a job
 
 ```bash
@@ -105,8 +119,8 @@ curl -X POST http://localhost:8080/api/jobs/<id>/cancel
 ### Health probes
 
 ```bash
-curl http://localhost:8080/live    # Liveness — 200 if process is up
-curl http://localhost:8080/ready   # Readiness — pings Postgres + Redis quorum
+curl http://localhost:8080/live    # Liveness - 200 if process is up
+curl http://localhost:8080/ready   # Readiness - pings Postgres + Redis quorum
 ```
 
 `/ready` returns `503` with per-dependency status if any required dependency is down. `/health` is kept as a backward-compat alias for `/live`.
@@ -146,7 +160,7 @@ PENDING → RUNNING → COMPLETED
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Prometheus | http://localhost:9090 | — |
+| Prometheus | http://localhost:9090 | - |
 | Grafana | http://localhost:3000 | admin / admin |
 
 ## Make Targets
@@ -169,7 +183,7 @@ make status id=… GET job status by ID
 
 ## Configuration
 
-All settings are read from environment variables. Copy `.env.example` to `.env` — the defaults work with `docker compose` out of the box.
+All settings are read from environment variables. Copy `.env.example` to `.env` - the defaults work with `docker compose` out of the box.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -180,6 +194,14 @@ All settings are read from environment variables. Copy `.env.example` to `.env` 
 | `POSTGRES_DSN` | see `.env.example` | PostgreSQL connection string |
 | `WORKER_CONCURRENCY` | `8` | Max parallel job executions |
 | `SCHEDULER_ENABLED` | `true` | Enable cron scheduler |
+| `RECONCILER_ENABLED` | `true` | Enable Postgres-backed recovery and due-job dispatch |
+| `RECONCILER_INTERVAL` | `1s` | Fast polling interval while jobs are being recovered |
+| `RECONCILER_IDLE_INTERVAL` | `15s` | Low-power polling interval when no due jobs are found |
+| `RECONCILER_BATCH_SIZE` | `100` | Max jobs recovered or claimed per reconciler pass |
+| `RECONCILER_RUNNING_LEASE` | `5m` | Lease duration before abandoned `RUNNING` jobs are recovered |
+| `WEBHOOK_TIMEOUT` | `10s` | Timeout for built-in webhook task calls |
+| `WEBHOOK_MAX_REDIRECTS` | `0` | Redirects allowed for webhook calls |
+| `WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Allow webhook calls to private, local, or link-local addresses |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
 > **Running outside Docker?** Change hostnames to `localhost` and set `POSTGRES_DSN` to use port `5433` (the host-mapped port).
@@ -191,7 +213,8 @@ cmd/server/         service entrypoint and bootstrap wiring
 internal/
   api/              HTTP handlers (enqueue, status, cancel)
   worker/           goroutine pool with bounded concurrency
-  scheduler/        cron-style recurring job orchestration
+  reconciler/       Postgres-backed due-job and lease recovery
+  scheduler/        cron-style job orchestration
   queue/            Kafka producer and consumer group
   retry/            exponential backoff with jitter
   circuitbreaker/   closed / half-open / open state machine
@@ -207,7 +230,19 @@ loadtest/           k6 load test script
 
 ## Plugging in Task Handlers
 
-`execute()` in `cmd/server/main.go` is where task dispatch lives. Register handlers by `task.name`:
+GoTaskQ ships with a built-in `webhook` task handler.
+Set `task.metadata.url` to the endpoint that should receive the job.
+The handler sends a JSON envelope containing the job ID, task name, attempt number, payload, and metadata.
+HTTP 2xx responses complete the job.
+HTTP 408, 429, and 5xx responses are retried.
+Most other 4xx responses dead-letter the job without retrying.
+Private, loopback, link-local, multicast, and unspecified webhook targets are blocked by default.
+Redirects are disabled by default.
+
+`idempotency_key` is optional but recommended for clients that may retry enqueue requests.
+When the same key is submitted again, GoTaskQ returns the existing job ID and does not publish a second job.
+
+`execute()` in `cmd/server/main.go` is also where custom in-process task dispatch lives. Register handlers by `task.name`:
 
 ```go
 var handlers = map[string]func(context.Context, models.Job) error{
@@ -218,7 +253,7 @@ var handlers = map[string]func(context.Context, models.Job) error{
 func (jw *jobWorker) execute(ctx context.Context, job models.Job) error {
     h, ok := handlers[job.Task.Name]
     if !ok {
-        return retry.ErrNoRetry // unknown task — don't retry
+        return retry.ErrNoRetry // unknown task - don't retry
     }
     return h(ctx, job)
 }
