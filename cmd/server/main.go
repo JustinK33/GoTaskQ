@@ -18,6 +18,7 @@ import (
 	"github.com/example/gotaskq/internal/api"
 	"github.com/example/gotaskq/internal/circuitbreaker"
 	"github.com/example/gotaskq/internal/config"
+	"github.com/example/gotaskq/internal/etl"
 	"github.com/example/gotaskq/internal/lock"
 	"github.com/example/gotaskq/internal/logger"
 	"github.com/example/gotaskq/internal/metrics"
@@ -144,7 +145,7 @@ func run(ctx context.Context) error {
 		retry:    retryEngine,
 		metrics:  reg,
 		log:      logger.WithComponent(log, "worker"),
-		handlers: defaultHandlers(cfg.Webhook),
+		handlers: defaultHandlers(cfg.Webhook, pgPool),
 		lease:    cfg.Reconciler.RunningLease,
 	}
 	workerPool := worker.NewPool(worker.Config{
@@ -233,14 +234,16 @@ type TaskHandler func(context.Context, models.Job) error
 // defaultHandlers returns the registry of task handlers. Add new entries here
 // to wire up real task logic; jobs whose Task.Name is unregistered fail with
 // retry.ErrNoRetry so they go straight to DEAD instead of looping forever.
-func defaultHandlers(cfg models.WebhookConfig) map[string]TaskHandler {
+func defaultHandlers(cfg models.WebhookConfig, pgPool *pgxpool.Pool) map[string]TaskHandler {
 	webhookExecutor := webhook.NewExecutorWithConfig(webhook.Config{
 		Timeout:              cfg.Timeout,
 		MaxRedirects:         cfg.MaxRedirects,
 		AllowPrivateNetworks: cfg.AllowPrivateNetworks,
 	})
+	etlExecutor := etl.NewExecutor(pgPool)
 	return map[string]TaskHandler{
 		webhook.TaskName(): webhookExecutor.Handler,
+		etl.TaskName():     etlExecutor.Handler,
 	}
 }
 
