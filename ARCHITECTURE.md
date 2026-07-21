@@ -1,9 +1,9 @@
 # GoTaskQ Architecture
 
-Distributed task queue in Go. Jobs come in over HTTP, land in Postgres (durable),
-get fanned out through Kafka (transport), and are executed by a bounded worker
-pool. Redis Redlock prevents duplicate execution when multiple instances run
-against the same topic.
+Reliable data workflow runtime in Go.
+Jobs come in over HTTP, land in Postgres (durable), get fanned out through Kafka (transport), and are executed by a bounded worker pool.
+Redis Redlock prevents duplicate execution when multiple instances run against the same topic.
+Built-in handlers include `webhook` delivery and `sql.etl` pipelines for Postgres-backed ELT workflows.
 
 ---
 
@@ -111,6 +111,11 @@ Main wiring. Stands up the HTTP server, Kafka consumer, and worker pool, then
 blocks on SIGTERM/SIGINT. Implements `jobWorker` (the `worker.JobRunner` that
 runs the circuit breaker / Redlock / execute chain) and `kafkaJobHandler` (the
 consumer bridge that feeds the pool). Drains in-flight work before exit.
+
+### `internal/etl`
+Built-in SQL ELT task executor.
+The `sql.etl` handler reads a pipeline spec from `task.payload`, validates target identifiers, rejects write-oriented extraction SQL, and executes `INSERT INTO target SELECT ...` against Postgres.
+This turns the queue into a small data workflow runtime for operational analytics.
 
 ### `internal/api`
 Three Gin endpoints:

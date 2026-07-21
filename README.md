@@ -1,4 +1,4 @@
-# GoTaskQ
+# DataflowQ
 
 [![ci](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml) [![cd](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml)
 
@@ -6,7 +6,18 @@
   <img src="ARCHITECTURE.png" alt="Architecture Diagram" width="800"/>
 </p>
 
-GoTaskQ is a production-grade distributed task queue written in Go. It uses Kafka for durable transport, PostgreSQL as the source-of-truth job state store, Redis (3-node Redlock) for distributed locking, Gin for HTTP, Prometheus + Grafana for observability, and zerolog for structured logging.
+DataflowQ is a reliable data workflow runtime built on a production-grade distributed task queue written in Go.
+It runs webhook jobs and SQL ELT pipelines with Kafka transport, PostgreSQL job state, Redis distributed locking, bounded workers, retry backoff, lease recovery, and Prometheus observability.
+The repository is still named `GoTaskQ` while the product direction moves toward `DataflowQ`.
+
+## Use Case
+
+DataflowQ is useful when a product team needs dependable background work and lightweight operational analytics without operating a heavyweight workflow platform.
+One practical use case is nightly analytics materialization.
+The application writes raw events or orders into Postgres, then enqueues a `sql.etl` job that aggregates the raw table into an analytics table.
+DataflowQ handles scheduling, retries, crash recovery, cancellation, idempotency, and metrics while Postgres handles the SQL transformation.
+
+See [docs/use-cases/sql-elt.md](docs/use-cases/sql-elt.md) for the full SQL ELT workflow.
 
 ## Stack
 
@@ -41,6 +52,23 @@ make enqueue url=https://example.com/webhook
 # 5. Check its status
 make status id=5c8058ea-40d6-49f5-9547-cfb37426b368
 ```
+
+## SQL ELT Quick Start
+
+Apply the optional demo schema after the stack is running.
+
+```bash
+docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/002_create_elt_demo.sql
+```
+
+Enqueue the sample daily revenue pipeline.
+
+```bash
+make enqueue-elt
+```
+
+The sample pipeline lives at [examples/daily_revenue_pipeline.json](examples/daily_revenue_pipeline.json).
+It reads from `raw.orders`, filters paid orders, groups by day, and loads `analytics.daily_revenue`.
 
 ## API
 
@@ -178,6 +206,7 @@ make vet          Run go vet
 make build        Compile binary to bin/gotaskq
 
 make enqueue      POST a sample job to the running stack
+make enqueue-elt  POST a sample SQL ELT job to the running stack
 make status id=… GET job status by ID
 ```
 
@@ -212,6 +241,7 @@ All settings are read from environment variables. Copy `.env.example` to `.env` 
 cmd/server/         service entrypoint and bootstrap wiring
 internal/
   api/              HTTP handlers (enqueue, status, cancel)
+  etl/              built-in SQL ELT task executor
   worker/           goroutine pool with bounded concurrency
   reconciler/       Postgres-backed due-job and lease recovery
   scheduler/        cron-style job orchestration
@@ -230,7 +260,7 @@ loadtest/           k6 load test script
 
 ## Plugging in Task Handlers
 
-GoTaskQ ships with a built-in `webhook` task handler.
+DataflowQ ships with built-in `webhook` and `sql.etl` task handlers.
 Set `task.metadata.url` to the endpoint that should receive the job.
 The handler sends a JSON envelope containing the job ID, task name, attempt number, payload, and metadata.
 HTTP 2xx responses complete the job.
@@ -238,6 +268,11 @@ HTTP 408, 429, and 5xx responses are retried.
 Most other 4xx responses dead-letter the job without retrying.
 Private, loopback, link-local, multicast, and unspecified webhook targets are blocked by default.
 Redirects are disabled by default.
+
+Set `task.name` to `sql.etl` to run a SQL ELT pipeline.
+The handler expects `task.payload` to contain a base64-encoded JSON spec with `extract_sql`, `target_table`, and `target_columns`.
+Only `SELECT` and `WITH` extraction queries are accepted, and target identifiers are validated and quoted before execution.
+Pipelines can use append mode or upsert mode with explicit conflict columns.
 
 `idempotency_key` is optional but recommended for clients that may retry enqueue requests.
 When the same key is submitted again, GoTaskQ returns the existing job ID and does not publish a second job.

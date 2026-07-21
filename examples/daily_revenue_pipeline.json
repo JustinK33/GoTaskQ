@@ -1,0 +1,7 @@
+{
+  "extract_sql": "SELECT ordered_at::date AS revenue_day, COUNT(*) AS order_count, SUM(order_total) AS gross_revenue FROM raw.orders WHERE status = 'paid' GROUP BY ordered_at::date",
+  "target_table": "analytics.daily_revenue",
+  "target_columns": ["revenue_day", "order_count", "gross_revenue"],
+  "write_mode": "upsert",
+  "conflict_columns": ["revenue_day"]
+}

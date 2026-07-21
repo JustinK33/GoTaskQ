@@ -81,6 +81,38 @@ func TestBuildInsertSQLAllowsCTE(t *testing.T) {
 	}
 }
 
+func TestBuildInsertSQLUpsert(t *testing.T) {
+	sql, err := BuildInsertSQL(PipelineSpec{
+		ExtractSQL:      "SELECT ordered_at::date, COUNT(*), SUM(order_total) FROM raw.orders GROUP BY ordered_at::date",
+		TargetTable:     "analytics.daily_revenue",
+		TargetColumns:   []string{"revenue_day", "order_count", "gross_revenue"},
+		WriteMode:       "upsert",
+		ConflictColumns: []string{"revenue_day"},
+	})
+	if err != nil {
+		t.Fatalf("BuildInsertSQL returned error: %v", err)
+	}
+
+	want := `INSERT INTO "analytics"."daily_revenue" ("revenue_day", "order_count", "gross_revenue")
+SELECT ordered_at::date, COUNT(*), SUM(order_total) FROM raw.orders GROUP BY ordered_at::date
+ON CONFLICT ("revenue_day") DO UPDATE SET "order_count" = EXCLUDED."order_count", "gross_revenue" = EXCLUDED."gross_revenue"`
+	if sql != want {
+		t.Fatalf("sql = %q, want %q", sql, want)
+	}
+}
+
+func TestBuildInsertSQLRejectsUpsertWithoutConflictColumns(t *testing.T) {
+	_, err := BuildInsertSQL(PipelineSpec{
+		ExtractSQL:    "SELECT id FROM orders",
+		TargetTable:   "analytics.orders",
+		TargetColumns: []string{"id"},
+		WriteMode:     "upsert",
+	})
+	if err == nil {
+		t.Fatal("BuildInsertSQL returned nil error")
+	}
+}
+
 func TestBuildInsertSQLRejectsUnsafeIdentifiers(t *testing.T) {
 	tests := []struct {
 		name string

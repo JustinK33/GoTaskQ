@@ -20,9 +20,12 @@ type Executor struct {
 }
 
 type PipelineSpec struct {
-	ExtractSQL    string   `json:"extract_sql"`
-	TargetTable   string   `json:"target_table"`
-	TargetColumns []string `json:"target_columns"`
+	ExtractSQL      string   `json:"extract_sql"`
+	TargetTable     string   `json:"target_table"`
+	TargetColumns   []string `json:"target_columns"`
+	WriteMode       string   `json:"write_mode,omitempty"`
+	ConflictColumns []string `json:"conflict_columns,omitempty"`
+	UpdateColumns   []string `json:"update_columns,omitempty"`
 }
 
 func NewExecutor(pool *pgxpool.Pool) *Executor {
@@ -68,6 +71,13 @@ func ParseSpec(payload []byte) (PipelineSpec, error) {
 	for i := range spec.TargetColumns {
 		spec.TargetColumns[i] = strings.TrimSpace(spec.TargetColumns[i])
 	}
+	spec.WriteMode = strings.TrimSpace(strings.ToLower(spec.WriteMode))
+	for i := range spec.ConflictColumns {
+		spec.ConflictColumns[i] = strings.TrimSpace(spec.ConflictColumns[i])
+	}
+	for i := range spec.UpdateColumns {
+		spec.UpdateColumns[i] = strings.TrimSpace(spec.UpdateColumns[i])
+	}
 	if spec.ExtractSQL == "" {
 		return PipelineSpec{}, fmt.Errorf("extract_sql is required")
 	}
@@ -77,10 +87,30 @@ func ParseSpec(payload []byte) (PipelineSpec, error) {
 	if len(spec.TargetColumns) == 0 {
 		return PipelineSpec{}, fmt.Errorf("target_columns is required")
 	}
+	if spec.WriteMode == "" {
+		spec.WriteMode = "append"
+	}
+	if spec.WriteMode != "append" && spec.WriteMode != "upsert" {
+		return PipelineSpec{}, fmt.Errorf("write_mode must be append or upsert")
+	}
+	if spec.WriteMode == "upsert" && len(spec.ConflictColumns) == 0 {
+		return PipelineSpec{}, fmt.Errorf("conflict_columns is required for upsert")
+	}
 	return spec, nil
 }
 
 func BuildInsertSQL(spec PipelineSpec) (string, error) {
+	writeMode := strings.TrimSpace(strings.ToLower(spec.WriteMode))
+	if writeMode == "" {
+		writeMode = "append"
+	}
+	if writeMode != "append" && writeMode != "upsert" {
+		return "", fmt.Errorf("write_mode must be append or upsert")
+	}
+	if writeMode == "upsert" && len(spec.ConflictColumns) == 0 {
+		return "", fmt.Errorf("conflict_columns is required for upsert")
+	}
+
 	targetTable, err := parseIdentifier(spec.TargetTable)
 	if err != nil {
 		return "", fmt.Errorf("target_table: %w", err)
@@ -98,17 +128,75 @@ func BuildInsertSQL(spec PipelineSpec) (string, error) {
 		targetColumns = append(targetColumns, identifier.Sanitize())
 	}
 
+	conflictColumns, err := sanitizeUnqualifiedIdentifiers(spec.ConflictColumns)
+	if err != nil {
+		return "", fmt.Errorf("conflict_columns: %w", err)
+	}
+	updateColumns := spec.UpdateColumns
+	if writeMode == "upsert" && len(updateColumns) == 0 {
+		updateColumns = nonConflictColumns(spec.TargetColumns, spec.ConflictColumns)
+	}
+	sanitizedUpdateColumns, err := sanitizeUnqualifiedIdentifiers(updateColumns)
+	if err != nil {
+		return "", fmt.Errorf("update_columns: %w", err)
+	}
+	if writeMode == "upsert" && len(sanitizedUpdateColumns) == 0 {
+		return "", fmt.Errorf("upsert requires at least one update column")
+	}
+
 	extractSQL, err := normalizeExtractSQL(spec.ExtractSQL)
 	if err != nil {
 		return "", fmt.Errorf("extract_sql: %w", err)
 	}
 
-	return fmt.Sprintf(
+	statement := fmt.Sprintf(
 		"INSERT INTO %s (%s)\n%s",
 		targetTable.Sanitize(),
 		strings.Join(targetColumns, ", "),
 		extractSQL,
-	), nil
+	)
+	if writeMode == "upsert" {
+		assignments := make([]string, 0, len(sanitizedUpdateColumns))
+		for _, column := range sanitizedUpdateColumns {
+			assignments = append(assignments, fmt.Sprintf("%s = EXCLUDED.%s", column, column))
+		}
+		statement = fmt.Sprintf(
+			"%s\nON CONFLICT (%s) DO UPDATE SET %s",
+			statement,
+			strings.Join(conflictColumns, ", "),
+			strings.Join(assignments, ", "),
+		)
+	}
+	return statement, nil
+}
+
+func sanitizeUnqualifiedIdentifiers(columns []string) ([]string, error) {
+	sanitized := make([]string, 0, len(columns))
+	for _, column := range columns {
+		identifier, err := parseIdentifier(column)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", column, err)
+		}
+		if len(identifier) != 1 {
+			return nil, fmt.Errorf("%q: column must be unqualified", column)
+		}
+		sanitized = append(sanitized, identifier.Sanitize())
+	}
+	return sanitized, nil
+}
+
+func nonConflictColumns(targetColumns []string, conflictColumns []string) []string {
+	conflicts := make(map[string]struct{}, len(conflictColumns))
+	for _, column := range conflictColumns {
+		conflicts[column] = struct{}{}
+	}
+	var columns []string
+	for _, column := range targetColumns {
+		if _, ok := conflicts[column]; !ok {
+			columns = append(columns, column)
+		}
+	}
+	return columns
 }
 
 func normalizeExtractSQL(sql string) (string, error) {

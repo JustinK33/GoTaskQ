@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps test test-race vet build tidy enqueue status list ready
+.PHONY: up down restart logs ps test test-race vet build tidy enqueue enqueue-elt status list ready
 
 # Start the full stack (builds the app image, waits for health checks)
 up:
@@ -48,6 +48,13 @@ enqueue:
 	curl -s -X POST http://localhost:8080/api/jobs \
 		-H "Content-Type: application/json" \
 		-d '{"idempotency_key":"sample-webhook-job","task":{"name":"webhook","payload":"aGVsbG8=","metadata":{"url":"$(url)"}}}' | jq .
+
+# Enqueue a SQL ELT job against the optional demo tables from migrations/002_create_elt_demo.sql
+enqueue-elt:
+	$(eval ELT_PAYLOAD := $(shell base64 < examples/daily_revenue_pipeline.json | tr -d '\n'))
+	curl -s -X POST http://localhost:8080/api/jobs \
+		-H "Content-Type: application/json" \
+		-d '{"idempotency_key":"sample-sql-elt-daily-revenue","task":{"name":"sql.etl","payload":"$(ELT_PAYLOAD)","max_retries":3,"metadata":{"pipeline":"daily_revenue"}}}' | jq .
 
 # Get job status - usage: make status id=<job-id>
 status:
