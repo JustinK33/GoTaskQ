@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/gotaskq/internal/retry"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/retry"
+	"github.com/example/conduit/pkg/models"
 )
 
 func TestHandlerSuccess(t *testing.T) {
 	var gotJobID string
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		gotJobID = r.Header.Get("X-GoTaskQ-Job-ID")
+		gotJobID = r.Header.Get("X-Conduit-Job-ID")
 		return response(http.StatusNoContent, ""), nil
 	})}
 
@@ -33,7 +33,7 @@ func TestHandlerSuccess(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotJobID != "job-1" {
-		t.Fatalf("X-GoTaskQ-Job-ID = %q, want job-1", gotJobID)
+		t.Fatalf("X-Conduit-Job-ID = %q, want job-1", gotJobID)
 	}
 }
 

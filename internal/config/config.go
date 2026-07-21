@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 )
 
 // Environment abstracts environment lookups so config loading can be tested
@@ -30,9 +30,9 @@ func Default() models.Config {
 		},
 		Kafka: models.KafkaConfig{
 			Brokers:           []string{"localhost:9092"},
-			Topic:             "gotaskq.jobs",
-			ConsumerGroup:     "gotaskq-workers",
-			ClientID:          "gotaskq",
+			Topic:             "conduit.jobs",
+			ConsumerGroup:     "conduit-workers",
+			ClientID:          "conduit",
 			RequiredAcks:      1,
 			CompressionCodec:  2, // snappy
 			FlushFrequencyMs:  5,
@@ -45,7 +45,7 @@ func Default() models.Config {
 			PoolSize:  10,
 		},
 		Postgres: models.PostgresConfig{
-			DSN:               "postgres://postgres:postgres@localhost:5432/gotaskq?sslmode=disable",
+			DSN:               "postgres://postgres:postgres@localhost:5432/conduit?sslmode=disable",
 			MaxConns:          10,
 			MinConns:          1,
 			MigrationsPath:    "migrations",
@@ -71,14 +71,14 @@ func Default() models.Config {
 			RunningLease: 5 * time.Minute,
 		},
 		Metrics: models.MetricsConfig{
-			Namespace:     "gotaskq",
+			Namespace:     "conduit",
 			Subsystem:     "server",
 			ListenAddress: ":9090",
 		},
 		Logger: models.LoggerConfig{
 			Level:       "info",
 			Format:      "json",
-			ServiceName: "gotaskq",
+			ServiceName: "conduit",
 			Environment: "development",
 		},
 		Webhook: models.WebhookConfig{

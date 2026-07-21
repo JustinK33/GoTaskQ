@@ -1,4 +1,4 @@
-# GoTaskQ Architecture
+# Conduit Architecture
 
 Reliable data workflow runtime in Go.
 Jobs come in over HTTP, land in Postgres (durable), get fanned out through Kafka (transport), and are executed by a bounded worker pool.
@@ -245,14 +245,14 @@ keeping it in-tree means we control the `Next()` behavior for tests.
 docker compose up --build
 
 # First run: apply the schema
-docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
+docker exec -i conduit-postgres-1 psql -U conduit -d conduit < migrations/001_create_jobs.sql
 ```
 
 Infrastructure only (run the server outside Docker):
 
 ```bash
 docker compose up -d kafka redis redis-2 redis-3 postgres
-docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
+docker exec -i conduit-postgres-1 psql -U conduit -d conduit < migrations/001_create_jobs.sql
 go run ./cmd/server
 ```
 
@@ -280,7 +280,7 @@ Endpoints:
 ## Repo Layout
 
 ```
-GoTaskQ/
+Conduit/
 ├── cmd/server/             # main + jobWorker + kafkaJobHandler
 ├── internal/
 │   ├── api/                # HTTP handlers

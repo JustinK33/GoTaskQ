@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/gotaskq/internal/retry"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/retry"
+	"github.com/example/conduit/pkg/models"
 )
 
 func TestParseSpec(t *testing.T) {

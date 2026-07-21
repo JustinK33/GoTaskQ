@@ -1,8 +1,8 @@
-# GoTaskQ Improvement Plan
+# Conduit Improvement Plan
 
 ## Product Direction
 
-GoTaskQ should become a self-hosted background job queue for Go services.
+Conduit should become a self-hosted background job queue for Go services.
 It compares most directly to Celery, Sidekiq, Asynq, Faktory, BullMQ, and lightweight Temporal use cases.
 It does not compare directly to Kafka because Kafka is a transport inside this system.
 
@@ -20,8 +20,8 @@ Status: implemented in this branch.
 ## Phase 2 - Make Jobs Actually Useful
 
 - Add one supported execution model for user tasks.
-- The strongest default option is webhook execution because users can adopt it without recompiling GoTaskQ.
-- A Go SDK handler mode is also useful, but it makes GoTaskQ more of a library or framework.
+- The strongest default option is webhook execution because users can adopt it without recompiling Conduit.
+- A Go SDK handler mode is also useful, but it makes Conduit more of a library or framework.
 - Container or Kubernetes Job execution is powerful, but it is heavier operationally.
 
 Status: webhook execution is implemented as the first supported task mechanism.

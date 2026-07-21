@@ -1,4 +1,4 @@
--- Jobs table: the durable backing store for GoTaskQ.
+-- Jobs table: the durable backing store for Conduit.
 -- Column names map directly to the fields in pkg/models.Job and pkg/models.Task.
 -- Run this once against your local Postgres before using PostgresStore.
 

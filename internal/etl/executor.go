@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/example/gotaskq/internal/retry"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/retry"
+	"github.com/example/conduit/pkg/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

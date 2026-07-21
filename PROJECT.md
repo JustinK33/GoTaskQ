@@ -1,12 +1,12 @@
-# GoTaskQ
+# Conduit
 
-A production-grade **distributed task queue** written in Go — built from scratch to demonstrate real-world backend engineering across the full distributed-systems stack.
+A production-grade **distributed task queue** written in Go - built from scratch to demonstrate real-world backend engineering across the full distributed-systems stack.
 
 ---
 
 ## What It Does
 
-GoTaskQ is an HTTP-driven job queue service that accepts work from callers, durably persists it in PostgreSQL, publishes it to a Kafka topic, and executes it through a bounded worker pool — all with automatic retries, distributed locking, circuit-breaking, and Prometheus observability.
+Conduit is an HTTP-driven job queue service that accepts work from callers, durably persists it in PostgreSQL, publishes it to a Kafka topic, and executes it through a bounded worker pool - all with automatic retries, distributed locking, circuit-breaking, and Prometheus observability.
 
 ```
 Client
@@ -42,7 +42,7 @@ PostgreSQL                  Worker Pool ──► JobRunner
 | **Redlock distributed locking** | Multi-node quorum lock for exclusive resource coordination |
 | **Exponential backoff** | Configurable base, multiplier, cap, and jitter |
 | **Circuit breaker** | Closed / Open / Half-Open state machine protecting downstream calls |
-| **Cron scheduler** | 5-field cron expressions with `*/n`, ranges, and lists — zero external dependencies |
+| **Cron scheduler** | 5-field cron expressions with `*/n`, ranges, and lists - zero external dependencies |
 | **Bounded worker pool** | Semaphore-controlled concurrency with graceful shutdown |
 | **Prometheus metrics** | Counters, gauges, histograms exposed on `/metrics` |
 | **Structured logging** | zerolog JSON logs with service/env/component fields |
@@ -89,8 +89,8 @@ deploy/prometheus/   ← prometheus.yml scrape config
 | Observability | Prometheus (`github.com/prometheus/client_golang`) |
 | Logging | zerolog (`github.com/rs/zerolog`) |
 | Containerisation | Docker Compose (Kafka, Postgres, 3× Redis, Prometheus, Grafana) |
-| Orchestration | Kubernetes — Deployment (3 replicas), Service, HPA (min 3 / max 10) |
-| CI/CD | GitHub Actions — vet → unit tests → race detector → Docker build → k6 load test |
+| Orchestration | Kubernetes - Deployment (3 replicas), Service, HPA (min 3 / max 10) |
+| CI/CD | GitHub Actions - vet → unit tests → race detector → Docker build → k6 load test |
 
 ---
 
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8080/api/jobs/4a7b1c2d-.../cancel
 
 ## Metrics
 
-All metrics are prefixed `gotaskq_server_*` by default (configurable via env vars).
+All metrics are prefixed `conduit_server_*` by default (configurable via env vars).
 
 | Metric | Type | Description |
 |---|---|---|
@@ -152,7 +152,7 @@ psql $POSTGRES_DSN -f migrations/001_create_jobs.sql
 
 # Build and run
 make build
-./bin/server
+./bin/conduit
 
 # In another terminal, enqueue a test job
 curl -X POST http://localhost:8080/api/jobs \
@@ -160,7 +160,7 @@ curl -X POST http://localhost:8080/api/jobs \
   -d '{"task":{"name":"hello-world","queue":"default"}}'
 
 # Metrics
-curl http://localhost:8080/metrics | grep gotaskq
+curl http://localhost:8080/metrics | grep conduit
 
 # Tear down
 make docker-down
@@ -170,7 +170,7 @@ make docker-down
 
 | Variable | Default | Description |
 |---|---|---|
-| `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5432/gotaskq?sslmode=disable` | PostgreSQL connection string |
+| `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5432/conduit?sslmode=disable` | PostgreSQL connection string |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker list |
 | `KAFKA_TOPIC` | `jobs` | Topic for job messages |
 | `REDIS_ADDRESSES` | `localhost:6379` | Comma-separated Redis addresses |
@@ -228,7 +228,7 @@ All numbers measured with Apache Bench against a locally running server (Kafka +
 | **Distributed lock nodes** | **3** | Redlock quorum across 3 independent Redis nodes |
 
 **Key tuning that drove the gains:**
-- Made Kafka publish non-blocking (goroutine after Postgres write) — removed the Kafka round-trip from the HTTP hot path
+- Made Kafka publish non-blocking (goroutine after Postgres write) - removed the Kafka round-trip from the HTTP hot path
 - pgx pool: MaxConns 25 → 50, added MaxConnLifetime / MaxConnIdleTime / HealthCheckPeriod
 - Kafka producer: snappy compression, 5ms flush frequency, 1MiB flush threshold, 256-deep channel buffer
 - Worker pool: Concurrency 10 → 50, QueueSize 100 → 500

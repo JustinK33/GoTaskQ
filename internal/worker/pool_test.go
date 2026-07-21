@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 )
 
 type mockRunner struct{}

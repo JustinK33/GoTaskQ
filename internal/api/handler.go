@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/example/gotaskq/internal/metrics"
-	"github.com/example/gotaskq/internal/store"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/metrics"
+	"github.com/example/conduit/internal/store"
+	"github.com/example/conduit/pkg/models"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )

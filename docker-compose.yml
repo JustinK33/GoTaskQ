@@ -1,3 +1,5 @@
+name: conduit
+
 services:
   kafka:
     image: apache/kafka:latest
@@ -58,11 +60,11 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: gotaskq
-      POSTGRES_USER: gotaskq
-      POSTGRES_PASSWORD: gotaskq
+      POSTGRES_DB: conduit
+      POSTGRES_USER: conduit
+      POSTGRES_PASSWORD: conduit
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gotaskq"]
+      test: ["CMD-SHELL", "pg_isready -U conduit"]
       interval: 5s
       timeout: 5s
       retries: 10

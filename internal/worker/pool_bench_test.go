@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 )
 
 // noopRunner completes jobs instantly. Used to isolate pool overhead from runner cost.

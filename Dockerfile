@@ -9,16 +9,16 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/gotaskq ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/conduit ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /
 
-COPY --from=builder /out/gotaskq /gotaskq
+COPY --from=builder /out/conduit /conduit
 
 EXPOSE 8080
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/gotaskq"]
+ENTRYPOINT ["/conduit"]

@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gotaskq
+  name: conduit
   labels:
-    app: gotaskq
+    app: conduit
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: gotaskq
+      app: conduit
   template:
     metadata:
       labels:
-        app: gotaskq
+        app: conduit
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
@@ -20,8 +20,8 @@ spec:
     spec:
       terminationGracePeriodSeconds: 35
       containers:
-        - name: gotaskq
-          image: gotaskq:latest
+        - name: conduit
+          image: conduit:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -29,9 +29,9 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: gotaskq-config
+                name: conduit-config
             - secretRef:
-                name: gotaskq-secrets
+                name: conduit-secrets
           readinessProbe:
             httpGet:
               path: /ready

@@ -1,14 +1,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: gotaskq
+  name: conduit
   labels:
-    app: gotaskq
+    app: conduit
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: gotaskq
+    name: conduit
   minReplicas: 3
   maxReplicas: 10
   metrics:

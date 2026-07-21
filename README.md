@@ -1,21 +1,21 @@
-# DataflowQ
+# Conduit
 
-[![ci](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/ci.yml) [![cd](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml/badge.svg)](https://github.com/JustinK33/GoTaskQ/actions/workflows/cd.yml)
+[![ci](https://github.com/JustinK33/Conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/JustinK33/Conduit/actions/workflows/ci.yml) [![cd](https://github.com/JustinK33/Conduit/actions/workflows/cd.yml/badge.svg)](https://github.com/JustinK33/Conduit/actions/workflows/cd.yml)
 
 <p align="center">
   <img src="ARCHITECTURE.png" alt="Architecture Diagram" width="800"/>
 </p>
 
-DataflowQ is a reliable data workflow runtime built on a production-grade distributed task queue written in Go.
+Conduit is a reliable data workflow runtime built on a production-grade distributed task queue written in Go.
 It runs webhook jobs and SQL ELT pipelines with Kafka transport, PostgreSQL job state, Redis distributed locking, bounded workers, retry backoff, lease recovery, and Prometheus observability.
-The repository is still named `GoTaskQ` while the product direction moves toward `DataflowQ`.
+It is designed for teams that need dependable background work and lightweight data workflows without adopting a heavyweight orchestration platform.
 
 ## Use Case
 
-DataflowQ is useful when a product team needs dependable background work and lightweight operational analytics without operating a heavyweight workflow platform.
+Conduit is useful when a product team needs dependable background work and lightweight operational analytics without operating a heavyweight workflow platform.
 One practical use case is nightly analytics materialization.
 The application writes raw events or orders into Postgres, then enqueues a `sql.etl` job that aggregates the raw table into an analytics table.
-DataflowQ handles scheduling, retries, crash recovery, cancellation, idempotency, and metrics while Postgres handles the SQL transformation.
+Conduit handles scheduling, retries, crash recovery, cancellation, idempotency, and metrics while Postgres handles the SQL transformation.
 
 See [docs/use-cases/sql-elt.md](docs/use-cases/sql-elt.md) for the full SQL ELT workflow.
 
@@ -37,7 +37,7 @@ See [docs/use-cases/sql-elt.md](docs/use-cases/sql-elt.md) for the full SQL ELT 
 
 ```bash
 # 1. Clone and enter the repo
-git clone https://github.com/JustinK33/GoTaskQ.git && cd GoTaskQ
+git clone https://github.com/JustinK33/Conduit.git && cd Conduit
 
 # 2. Copy the env file (defaults work with Docker Compose out of the box)
 cp .env.example .env
@@ -58,7 +58,7 @@ make status id=5c8058ea-40d6-49f5-9547-cfb37426b368
 Apply the optional demo schema after the stack is running.
 
 ```bash
-docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/002_create_elt_demo.sql
+docker exec -i conduit-postgres-1 psql -U conduit -d conduit < migrations/002_create_elt_demo.sql
 ```
 
 Enqueue the sample daily revenue pipeline.
@@ -203,7 +203,7 @@ make ps           Show container status
 make test         Run unit tests
 make test-race    Run tests with race detector
 make vet          Run go vet
-make build        Compile binary to bin/gotaskq
+make build        Compile binary to bin/conduit
 
 make enqueue      POST a sample job to the running stack
 make enqueue-elt  POST a sample SQL ELT job to the running stack
@@ -218,7 +218,7 @@ All settings are read from environment variables. Copy `.env.example` to `.env` 
 |----------|---------|-------------|
 | `HTTP_ADDRESS` | `:8080` | Listen address |
 | `KAFKA_BROKERS` | `kafka:9092` | Comma-separated broker list |
-| `KAFKA_TOPIC` | `gotaskq.jobs` | Job topic |
+| `KAFKA_TOPIC` | `conduit.jobs` | Job topic |
 | `REDIS_ADDRESSES` | `redis:6379,...` | Comma-separated Redis nodes |
 | `POSTGRES_DSN` | see `.env.example` | PostgreSQL connection string |
 | `WORKER_CONCURRENCY` | `8` | Max parallel job executions |
@@ -260,7 +260,7 @@ loadtest/           k6 load test script
 
 ## Plugging in Task Handlers
 
-DataflowQ ships with built-in `webhook` and `sql.etl` task handlers.
+Conduit ships with built-in `webhook` and `sql.etl` task handlers.
 Set `task.metadata.url` to the endpoint that should receive the job.
 The handler sends a JSON envelope containing the job ID, task name, attempt number, payload, and metadata.
 HTTP 2xx responses complete the job.
@@ -275,7 +275,7 @@ Only `SELECT` and `WITH` extraction queries are accepted, and target identifiers
 Pipelines can use append mode or upsert mode with explicit conflict columns.
 
 `idempotency_key` is optional but recommended for clients that may retry enqueue requests.
-When the same key is submitted again, GoTaskQ returns the existing job ID and does not publish a second job.
+When the same key is submitted again, Conduit returns the existing job ID and does not publish a second job.
 
 `execute()` in `cmd/server/main.go` is also where custom in-process task dispatch lives. Register handlers by `task.name`:
 

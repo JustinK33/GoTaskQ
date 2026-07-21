@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/IBM/sarama"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 )
 
 type mockMessageHandler struct{}
@@ -19,7 +19,7 @@ func TestNewKafkaClient(t *testing.T) {
 		name string
 		cfg  models.KafkaConfig
 	}{
-		{name: "builds kafka wrapper", cfg: models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "gotaskq"}},
+		{name: "builds kafka wrapper", cfg: models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "conduit"}},
 	}
 
 	for _, tc := range tests {

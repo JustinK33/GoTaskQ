@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 )
 
 type mockEnvironment struct {
@@ -29,7 +29,7 @@ func TestLoad(t *testing.T) {
 	t.Run("returns config from process environment", func(t *testing.T) {
 		// Load reads real environment variables; set them in the test process if needed.
 		_, err := Load()
-		// An unset environment may return an error or a zero config — both are valid outcomes.
+		// An unset environment may return an error or a zero config - both are valid outcomes.
 		// Once you implement Validate, assert that a fully set env returns err == nil.
 		_ = err
 	})
@@ -106,7 +106,7 @@ func TestValidate(t *testing.T) {
 			cfg: models.Config{
 				HTTP:     models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
 				Kafka:    models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
-				Postgres: models.PostgresConfig{DSN: "postgres://localhost/gotaskq"},
+				Postgres: models.PostgresConfig{DSN: "postgres://localhost/conduit"},
 				Worker:   models.WorkerConfig{Concurrency: 4, QueueSize: 32},
 				Webhook:  models.WebhookConfig{Timeout: time.Second},
 			},
@@ -117,7 +117,7 @@ func TestValidate(t *testing.T) {
 			cfg: models.Config{
 				HTTP:     models.HTTPConfig{Address: ":8080", ReadTimeout: 5e9, WriteTimeout: 5e9},
 				Kafka:    models.KafkaConfig{Brokers: []string{"localhost:9092"}, Topic: "jobs", ConsumerGroup: "workers"},
-				Postgres: models.PostgresConfig{DSN: "postgres://localhost/gotaskq"},
+				Postgres: models.PostgresConfig{DSN: "postgres://localhost/conduit"},
 				Worker:   models.WorkerConfig{Concurrency: 0, QueueSize: 32},
 			},
 			wantErr: true,

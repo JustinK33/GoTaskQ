@@ -90,7 +90,7 @@ func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
 			}, nil
 		}
 
-		// Partial win — release all acquired locks before retrying.
+		// Partial win - release all acquired locks before retrying.
 		for _, client := range m.clients {
 			releaseSingle(ctx, client, resource, value)
 		}

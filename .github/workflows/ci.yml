@@ -44,16 +44,16 @@ jobs:
         run: go mod download
 
       - name: Compile
-        run: go build -o bin/server ./cmd/server
+        run: go build -o bin/conduit ./cmd/server
 
       - name: Docker build
-        run: docker build -t gotaskq:${{ github.sha }} .
+        run: docker build -t conduit:${{ github.sha }} .
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: server-binary
-          path: bin/server
+          name: conduit-binary
+          path: bin/conduit
 
   load-test:
     runs-on: ubuntu-latest
@@ -73,20 +73,20 @@ jobs:
       - name: Download binary
         uses: actions/download-artifact@v4
         with:
-          name: server-binary
+          name: conduit-binary
           path: bin/
 
       - name: Make binary executable
-        run: chmod +x bin/server
+        run: chmod +x bin/conduit
 
       - name: Start infrastructure
         run: |
           docker compose up -d --wait kafka redis redis-2 redis-3 postgres
-          docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
+          docker exec -i conduit-postgres-1 psql -U conduit -d conduit < migrations/001_create_jobs.sql
 
       - name: Start server
         env:
-          POSTGRES_DSN: postgres://gotaskq:gotaskq@localhost:5433/gotaskq?sslmode=disable
+          POSTGRES_DSN: postgres://conduit:conduit@localhost:5433/conduit?sslmode=disable
           KAFKA_BROKERS: localhost:9092
           KAFKA_TOPIC: jobs
           REDIS_ADDRESSES: localhost:6379,localhost:6380,localhost:6381
@@ -100,23 +100,23 @@ jobs:
           POSTGRES_MIN_CONNS: "10"
           HTTP_ADDRESS: ":8080"
         run: |
-          nohup bin/server > /tmp/server.log 2>&1 &
-          echo $! > /tmp/server.pid
+          nohup bin/conduit > /tmp/conduit.log 2>&1 &
+          echo $! > /tmp/conduit.pid
           echo "Waiting for server (max 90s)..."
           for i in $(seq 1 90); do
             if curl -sf http://localhost:8080/health >/dev/null; then
               echo "server up after ${i}s"
               exit 0
             fi
-            if ! kill -0 "$(cat /tmp/server.pid)" 2>/dev/null; then
+            if ! kill -0 "$(cat /tmp/conduit.pid)" 2>/dev/null; then
               echo "server process exited"
-              cat /tmp/server.log
+              cat /tmp/conduit.log
               exit 1
             fi
             sleep 1
           done
           echo "server did not become healthy in 90s"
-          cat /tmp/server.log
+          cat /tmp/conduit.log
           exit 1
 
       - name: Run k6 load test
@@ -126,6 +126,6 @@ jobs:
         env:
           BASE_URL: http://127.0.0.1:8080
 
-      - name: Server logs (on failure)
+      - name: Conduit logs (on failure)
         if: failure()
-        run: cat /tmp/server.log || true
+        run: cat /tmp/conduit.log || true

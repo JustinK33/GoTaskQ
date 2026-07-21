@@ -1,11 +1,11 @@
-# GoTaskQ — Feature Deep Dives
+# Conduit - Feature Deep Dives
 
 Three backend engineering features implemented for production-grade performance and reliability.
-Study this alongside the code — every section maps to real files you can open.
+Study this alongside the code - every section maps to real files you can open.
 
 ---
 
-## Feature 1 — Async Kafka Publish + Tuning (400+ req/s, sub-1ms p50)
+## Feature 1 - Async Kafka Publish + Tuning (400+ req/s, sub-1ms p50)
 
 ### The Problem
 
@@ -25,7 +25,7 @@ Every HTTP request had to wait for a TCP round-trip to the Kafka broker before s
 
 ---
 
-### The Fix — Make Kafka Non-Blocking
+### The Fix - Make Kafka Non-Blocking
 
 **File:** `internal/service/job_service.go`
 
@@ -45,7 +45,7 @@ go func() {
 return job.ID, nil
 ```
 
-The key insight: **Postgres is the source of truth**. The job is written durably before we return. Kafka is only a delivery signal — if the goroutine's publish fails, the job stays `PENDING` in Postgres and the scheduler can reconcile it.
+The key insight: **Postgres is the source of truth**. The job is written durably before we return. Kafka is only a delivery signal - if the goroutine's publish fails, the job stays `PENDING` in Postgres and the scheduler can reconcile it.
 
 New hot path:
 ```
@@ -62,7 +62,7 @@ HTTP POST /api/jobs
 
 ### Kafka Producer Tuning
 
-**File:** `internal/queue/kafka.go` — `NewKafkaClient`
+**File:** `internal/queue/kafka.go` - `NewKafkaClient`
 
 ```go
 sc.Version = sarama.V3_3_0_0           // upgraded from V2_6_0_0
@@ -85,7 +85,7 @@ sc.Producer.Flush.Bytes = cfg.FlushBytes  // 1 MiB
 
 ### pgx Connection Pool Tuning
 
-**File:** `cmd/server/main.go` — after `pgxpool.ParseConfig`
+**File:** `cmd/server/main.go` - after `pgxpool.ParseConfig`
 
 ```go
 pgCfg.MaxConns = cfg.Postgres.MaxConns           // 25 → 50
@@ -114,18 +114,18 @@ pgCfg.HealthCheckPeriod = cfg.Postgres.HealthCheckPeriod // 1 minute
 A: The `AsyncProducer` API requires you to drain an error channel in a separate goroutine or you'll leak memory. For the enqueue path, firing a `go func()` with a `SyncProducer` call is simpler and easier to reason about. In a high-throughput service you'd use a proper `AsyncProducer` with a background drain loop.
 
 **Q: What happens if the goroutine's Kafka publish fails?**
-A: The job is already written to Postgres in state `PENDING`. The scheduler (see `internal/scheduler`) can poll for PENDING jobs that were never picked up by a worker — this is the reconciliation path. This is a well-known pattern called "transactional outbox."
+A: The job is already written to Postgres in state `PENDING`. The scheduler (see `internal/scheduler`) can poll for PENDING jobs that were never picked up by a worker - this is the reconciliation path. This is a well-known pattern called "transactional outbox."
 
 **Q: What does `MaxConnLifetime` actually protect against?**
 A: Long-lived TCP connections can go stale when a load balancer, firewall, or the DB server itself drops them silently. Without a lifetime limit, the pool may hold connections that look healthy but will fail on the next query. Rotating them every 30 minutes ensures the pool stays clean.
 
 ---
 
-## Feature 2 — Redlock Distributed Locking Across 3 Redis Nodes
+## Feature 2 - Redlock Distributed Locking Across 3 Redis Nodes
 
 ### The Problem
 
-A distributed task queue running multiple instances (or pods) can pick up the same job twice if two workers claim it at the same moment. A single Redis lock fails if that Redis node goes down — you either lose lock enforcement or block all workers.
+A distributed task queue running multiple instances (or pods) can pick up the same job twice if two workers claim it at the same moment. A single Redis lock fails if that Redis node goes down - you either lose lock enforcement or block all workers.
 
 ### The Redlock Algorithm
 
@@ -152,7 +152,7 @@ func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
         acquired := 0
 
         for _, client := range m.clients {
-            // SetNX = "SET if Not eXists" — atomic, won't overwrite an existing lock
+            // SetNX = "SET if Not eXists" - atomic, won't overwrite an existing lock
             ok, _ := client.SetNX(ctx, resource, value, m.cfg.TTL).Result()
             if ok {
                 acquired++
@@ -167,7 +167,7 @@ func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
             return Lock{Resource: resource, Value: value, Expiry: time.Now().Add(validity)}, nil
         }
 
-        // Partial win — MUST release all acquired locks before retrying
+        // Partial win - MUST release all acquired locks before retrying
         for _, client := range m.clients {
             releaseSingle(ctx, client, resource, value)
         }
@@ -176,7 +176,7 @@ func (m *Manager) Acquire(ctx context.Context, resource string) (Lock, error) {
 }
 ```
 
-**Why release on partial win?** If you acquired 1 out of 3 nodes and give up, that one node still holds your lock until TTL expires. Another caller trying to acquire the same lock would also get 1 node — now both callers think they failed, but both hold 1 node each and neither can reach quorum. You'd be wasting locks. Releasing immediately lets the next attempt start clean.
+**Why release on partial win?** If you acquired 1 out of 3 nodes and give up, that one node still holds your lock until TTL expires. Another caller trying to acquire the same lock would also get 1 node - now both callers think they failed, but both hold 1 node each and neither can reach quorum. You'd be wasting locks. Releasing immediately lets the next attempt start clean.
 
 #### Safe Release with Lua:
 
@@ -221,13 +221,13 @@ redis-3:
   ports: ["6381:6379"]
 ```
 
-**File:** `internal/config/config.go` — default changed to:
+**File:** `internal/config/config.go` - default changed to:
 
 ```go
 Addresses: []string{"localhost:6379", "localhost:6380", "localhost:6381"},
 ```
 
-**File:** `cmd/server/main.go` — each address becomes a separate client:
+**File:** `cmd/server/main.go` - each address becomes a separate client:
 
 ```go
 for _, addr := range cfg.Redis.Addresses {
@@ -251,28 +251,28 @@ Quorum = `len(clients)/2 + 1` = `3/2 + 1` = **2**. Any 2 of 3 nodes can grant th
 ### Interview Questions You Should Know
 
 **Q: Why not just use a single Redis lock?**
-A: A single node is a single point of failure. If that Redis instance goes down, all lock acquisitions fail — workers either all block or you have to remove the lock check (risking duplicate execution). Redlock ensures the system keeps working as long as a majority of nodes are alive.
+A: A single node is a single point of failure. If that Redis instance goes down, all lock acquisitions fail - workers either all block or you have to remove the lock check (risking duplicate execution). Redlock ensures the system keeps working as long as a majority of nodes are alive.
 
 **Q: What is the quorum formula and why?**
-A: `quorum = n/2 + 1` (integer division). For 3 nodes: quorum = 2. This is the same majority rule used in Raft and Paxos. You need a majority so that no two clients can simultaneously claim quorum on disjoint sets of nodes — with 3 nodes and quorum=2, any two winning sets must overlap on at least one node, preventing split-brain.
+A: `quorum = n/2 + 1` (integer division). For 3 nodes: quorum = 2. This is the same majority rule used in Raft and Paxos. You need a majority so that no two clients can simultaneously claim quorum on disjoint sets of nodes - with 3 nodes and quorum=2, any two winning sets must overlap on at least one node, preventing split-brain.
 
 **Q: What is the "validity window" and why does it matter?**
 A: After acquiring the lock, the actual time you can safely use it is `TTL - (time spent acquiring) - drift`. If acquiring the lock across 3 nodes took 50ms and your TTL is 30s, you have ~29.95s of safe usage. If you ignore this and use the full TTL, a slow network could mean your lock has already expired by the time you act on it.
 
 **Q: What happens if a node crashes after you set the lock on it?**
-A: The lock on that node is simply gone. But since you needed quorum (2/3 nodes), you still hold the lock on the remaining nodes. When the crashed node restarts, it has no lock for your resource, so the next `SetNX` attempt by someone else on that node will succeed — but they still won't reach quorum because your other nodes still hold it. This is why requiring quorum is essential.
+A: The lock on that node is simply gone. But since you needed quorum (2/3 nodes), you still hold the lock on the remaining nodes. When the crashed node restarts, it has no lock for your resource, so the next `SetNX` attempt by someone else on that node will succeed - but they still won't reach quorum because your other nodes still hold it. This is why requiring quorum is essential.
 
 ---
 
-## Feature 3 — Kubernetes + CI/CD Pipeline
+## Feature 3 - Kubernetes + CI/CD Pipeline
 
 ### Kubernetes Manifests
 
 **Directory:** `deploy/k8s/`
 
-Four manifest files work together to run GoTaskQ in a Kubernetes cluster.
+Four manifest files work together to run Conduit in a Kubernetes cluster.
 
-#### `deployment.yaml` — the workload
+#### `deployment.yaml` - the workload
 
 ```yaml
 spec:
@@ -281,13 +281,13 @@ spec:
     spec:
       terminationGracePeriodSeconds: 35  # longer than ShutdownTimeout (30s)
       containers:
-        - name: gotaskq
-          image: gotaskq:latest
+        - name: conduit
+          image: conduit:latest
           envFrom:
             - configMapRef:
-                name: gotaskq-config   # non-secret env vars
+                name: conduit-config   # non-secret env vars
             - secretRef:
-                name: gotaskq-secrets  # POSTGRES_DSN, Redis passwords
+                name: conduit-secrets  # POSTGRES_DSN, Redis passwords
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 5
@@ -307,27 +307,27 @@ spec:
 
 | Decision | Reason |
 |---|---|
-| `replicas: 3` | Matches the 3-node Redis quorum — each pod can independently acquire Redlock |
+| `replicas: 3` | Matches the 3-node Redis quorum - each pod can independently acquire Redlock |
 | `terminationGracePeriodSeconds: 35` | Must be longer than the worker's `ShutdownTimeout` (30s) so in-flight jobs finish before the pod is killed |
 | `readinessProbe` before `livenessProbe` | Readiness removes the pod from load balancer rotation; liveness restarts it. Both hit `/health`. |
-| `requests` < `limits` | Allows bursting — pod can use up to 500m CPU temporarily without being throttled by default |
+| `requests` < `limits` | Allows bursting - pod can use up to 500m CPU temporarily without being throttled by default |
 | `envFrom.secretRef` | Credentials (DSN, passwords) come from a Kubernetes Secret, not the ConfigMap (which is world-readable within the cluster) |
 
-#### `service.yaml` — stable network address
+#### `service.yaml` - stable network address
 
 ```yaml
 spec:
   selector:
-    app: gotaskq
+    app: conduit
   ports:
     - port: 80
       targetPort: http  # named port from deployment (8080)
   type: ClusterIP
 ```
 
-A ClusterIP Service gives all 3 pods a single stable DNS name (`gotaskq.default.svc.cluster.local`) and load-balances across them. External traffic would go through an Ingress or LoadBalancer Service on top of this.
+A ClusterIP Service gives all 3 pods a single stable DNS name (`conduit.default.svc.cluster.local`) and load-balances across them. External traffic would go through an Ingress or LoadBalancer Service on top of this.
 
-#### `hpa.yaml` — auto-scaling
+#### `hpa.yaml` - auto-scaling
 
 ```yaml
 spec:
@@ -344,7 +344,7 @@ spec:
 
 When average CPU across all pods exceeds 70%, Kubernetes adds pods (up to 10). When it drops, pods are removed (down to 3). The HPA requires the `metrics-server` addon in the cluster.
 
-#### `configmap.yaml` — environment variables
+#### `configmap.yaml` - environment variables
 
 ```yaml
 data:
@@ -389,8 +389,8 @@ The **race detector** (`-race`) instruments every memory access at runtime and p
 #### `build` job (depends on `test`)
 
 ```yaml
-- run: go build -o bin/server ./cmd/server
-- run: docker build -t gotaskq:${{ github.sha }} .
+- run: go build -o bin/conduit ./cmd/server
+- run: docker build -t conduit:${{ github.sha }} .
 - uses: actions/upload-artifact@v4   # passes binary to next job
 ```
 
@@ -402,12 +402,12 @@ The binary is uploaded as a GitHub Actions artifact so the `load-test` job can d
 - name: Start infrastructure
   run: |
     docker compose up -d kafka redis redis-2 redis-3 postgres
-    until docker exec gotaskq-postgres-1 pg_isready -U gotaskq; do sleep 2; done
-    docker exec -i gotaskq-postgres-1 psql -U gotaskq -d gotaskq < migrations/001_create_jobs.sql
+    until docker exec conduit-postgres-1 pg_isready -U conduit; do sleep 2; done
+    docker exec -i conduit-postgres-1 psql -U conduit -d conduit < migrations/001_create_jobs.sql
 
 - name: Start server
   run: |
-    nohup bin/server > /tmp/server.log 2>&1 &
+    nohup bin/conduit > /tmp/conduit.log 2>&1 &
     until curl -sf http://localhost:8080/health; do sleep 1; done
 
 - uses: grafana/k6-action@v0.3.1
@@ -424,10 +424,10 @@ This job spins up the real infrastructure (not mocks), runs the real compiled bi
 ### Interview Questions You Should Know
 
 **Q: What is the difference between a readinessProbe and a livenessProbe?**
-A: `readinessProbe` controls whether the pod receives traffic. If it fails, Kubernetes removes the pod from the Service's endpoints — traffic stops going to it, but the pod keeps running. `livenessProbe` controls whether the pod should be restarted. If it fails repeatedly, Kubernetes kills and restarts the pod. You use readiness to handle temporary unavailability (e.g., warming up), and liveness to handle deadlocks or fatal states.
+A: `readinessProbe` controls whether the pod receives traffic. If it fails, Kubernetes removes the pod from the Service's endpoints - traffic stops going to it, but the pod keeps running. `livenessProbe` controls whether the pod should be restarted. If it fails repeatedly, Kubernetes kills and restarts the pod. You use readiness to handle temporary unavailability (e.g., warming up), and liveness to handle deadlocks or fatal states.
 
 **Q: Why is `terminationGracePeriodSeconds` set to 35 and not 30?**
-A: When Kubernetes terminates a pod, it sends SIGTERM and waits `terminationGracePeriodSeconds` before sending SIGKILL. GoTaskQ's graceful shutdown drains the worker pool within 30 seconds (`ShutdownTimeout`). If the grace period were also 30s, there's a race: Kubernetes might SIGKILL the pod at exactly the same moment the drain completes. Setting it to 35s gives the application 5 extra seconds of buffer.
+A: When Kubernetes terminates a pod, it sends SIGTERM and waits `terminationGracePeriodSeconds` before sending SIGKILL. Conduit's graceful shutdown drains the worker pool within 30 seconds (`ShutdownTimeout`). If the grace period were also 30s, there's a race: Kubernetes might SIGKILL the pod at exactly the same moment the drain completes. Setting it to 35s gives the application 5 extra seconds of buffer.
 
 **Q: What is a GitHub Actions artifact and why use one?**
 A: An artifact is a file uploaded from one job that later jobs can download. The `build` job compiles the binary and uploads it; `load-test` downloads and runs it. This avoids recompiling in the `load-test` job, saves 20–30 seconds, and ensures the exact same binary that passed compilation is the one being load-tested.
@@ -436,11 +436,11 @@ A: An artifact is a file uploaded from one job that later jobs can download. The
 A: The race detector adds ~5–10x runtime overhead. Keeping it separate means the basic unit tests still run fast. In CI you want both: fast feedback from the regular tests, and race coverage from the slower instrumented run. The race detector catches an entire class of bugs (data races) that normal tests and even careful code review can miss.
 
 **Q: What is `ClusterIP` and when would you use `LoadBalancer` instead?**
-A: `ClusterIP` exposes the Service on a cluster-internal IP — only reachable from within the cluster. Other services in the cluster call `gotaskq.default.svc.cluster.local`. `LoadBalancer` provisions an external cloud load balancer (e.g., AWS ELB) with a public IP. For GoTaskQ, ClusterIP is correct because the job queue API would sit behind an Ingress controller or API gateway — external traffic never hits the pods directly.
+A: `ClusterIP` exposes the Service on a cluster-internal IP - only reachable from within the cluster. Other services in the cluster call `conduit.default.svc.cluster.local`. `LoadBalancer` provisions an external cloud load balancer (e.g., AWS ELB) with a public IP. For Conduit, ClusterIP is correct because the job queue API would sit behind an Ingress controller or API gateway - external traffic never hits the pods directly.
 
 ---
 
-## Quick Reference — Files Changed
+## Quick Reference - Files Changed
 
 | Feature | Files |
 |---|---|
@@ -448,6 +448,6 @@ A: `ClusterIP` exposes the Service on a cluster-internal IP — only reachable f
 | Kafka tuning | `internal/queue/kafka.go`, `pkg/models/models.go`, `internal/config/config.go` |
 | pgx tuning | `cmd/server/main.go`, `pkg/models/models.go`, `internal/config/config.go` |
 | 3 Redis nodes | `docker-compose.yml`, `internal/config/config.go`, `.env` |
-| Redlock logic | `internal/lock/redlock.go` (unchanged — already correct) |
+| Redlock logic | `internal/lock/redlock.go` (unchanged - already correct) |
 | K8s manifests | `deploy/k8s/deployment.yaml`, `service.yaml`, `configmap.yaml`, `hpa.yaml` |
 | CI/CD | `.github/workflows/ci.yml`, `loadtest/k6.js` |

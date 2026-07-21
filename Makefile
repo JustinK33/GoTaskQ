@@ -33,7 +33,7 @@ vet:
 
 # Compile the server binary
 build:
-	go build -o bin/gotaskq ./cmd/server
+	go build -o bin/conduit ./cmd/server
 
 # Download dependencies and tidy go.sum
 tidy:

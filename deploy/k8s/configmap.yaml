@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gotaskq-config
+  name: conduit-config
   labels:
-    app: gotaskq
+    app: conduit
 data:
   KAFKA_BROKERS: "kafka:9092"
-  KAFKA_TOPIC: "gotaskq.jobs"
-  KAFKA_CONSUMER_GROUP: "gotaskq-workers"
+  KAFKA_TOPIC: "conduit.jobs"
+  KAFKA_CONSUMER_GROUP: "conduit-workers"
   KAFKA_COMPRESSION_CODEC: "2"
   KAFKA_FLUSH_FREQUENCY_MS: "5"
   KAFKA_FLUSH_BYTES: "1048576"
@@ -32,5 +32,5 @@ data:
   HTTP_ADDRESS: ":8080"
   LOG_LEVEL: "info"
   LOG_FORMAT: "json"
-  METRICS_NAMESPACE: "gotaskq"
+  METRICS_NAMESPACE: "conduit"
   METRICS_SUBSYSTEM: "server"

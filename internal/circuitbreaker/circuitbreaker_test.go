@@ -72,10 +72,10 @@ func TestBreakerAllow(t *testing.T) {
 
 func TestBreakerRecordFailure(t *testing.T) {
 	tests := []struct {
-		name            string
-		failureCount    int
+		name             string
+		failureCount     int
 		failureThreshold int
-		wantState       State
+		wantState        State
 	}{
 		{
 			name:             "stays closed below threshold",

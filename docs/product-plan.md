@@ -1,10 +1,10 @@
-# DataflowQ Product Plan
+# Conduit Product Plan
 
 ## Name
 
-Use `DataflowQ` as the product name.
-It is clearer than `GoTaskQ` because the project is evolving from a generic Go task queue into a reliable data workflow runtime.
-The repository and Go module can be renamed later as a mechanical migration after the product direction is stable.
+Use `Conduit` as the product name, repository name, and Go module identity.
+It fits the project because Conduit moves work and data reliably from source systems to durable destinations.
+The name also sounds like infrastructure: short, technical, and easy to use in a resume or architecture diagram.
 
 ## Target User
 
@@ -14,12 +14,12 @@ They need durable background jobs, webhook delivery, and recurring data transfor
 ## Core Use Case
 
 The core use case is operational analytics materialization.
-Applications write raw data into Postgres, enqueue a SQL ELT job, and DataflowQ reliably transforms that raw data into analytics tables.
+Applications write raw data into Postgres, enqueue a SQL ELT job, and Conduit reliably transforms that raw data into analytics tables.
 The first demo pipeline turns `raw.orders` into `analytics.daily_revenue`.
 
 ## What Exists Now
 
-DataflowQ already has durable job state in Postgres.
+Conduit already has durable job state in Postgres.
 It already has Kafka transport for fast worker dispatch.
 It already has Redis distributed locks to reduce duplicate execution across instances.
 It already has retry backoff, lease recovery, cancellation, request IDs, readiness checks, and Prometheus metrics.
@@ -45,11 +45,11 @@ Add an index recommendation report based on common filters, join keys, and group
 
 Strong project title:
 
-> DataflowQ - Reliable SQL ELT and background workflow runtime in Go.
+> Conduit - Reliable SQL ELT and background workflow runtime in Go.
 
 Strong resume bullet:
 
-> Built DataflowQ, a Go-based workflow runtime that executes SQL ELT pipelines through Kafka-backed durable jobs, Postgres state machines, Redis distributed locks, retry backoff, lease recovery, and Prometheus observability.
+> Built Conduit, a Go-based workflow runtime that executes SQL ELT pipelines through Kafka-backed durable jobs, Postgres state machines, Redis distributed locks, retry backoff, lease recovery, and Prometheus observability.
 
 Technical talking points:
 

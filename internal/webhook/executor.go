@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/gotaskq/internal/retry"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/retry"
+	"github.com/example/conduit/pkg/models"
 )
 
 const (
@@ -114,9 +114,9 @@ func (e *Executor) Handler(ctx context.Context, job models.Job) error {
 		return fmt.Errorf("webhook: create request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "GoTaskQ webhook executor")
-	request.Header.Set("X-GoTaskQ-Job-ID", job.ID)
-	request.Header.Set("X-GoTaskQ-Attempt", fmt.Sprintf("%d", job.Attempt))
+	request.Header.Set("User-Agent", "Conduit webhook executor")
+	request.Header.Set("X-Conduit-Job-ID", job.ID)
+	request.Header.Set("X-Conduit-Attempt", fmt.Sprintf("%d", job.Attempt))
 
 	response, err := e.client.Do(request)
 	if err != nil {

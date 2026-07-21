@@ -15,22 +15,22 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/example/gotaskq/internal/api"
-	"github.com/example/gotaskq/internal/circuitbreaker"
-	"github.com/example/gotaskq/internal/config"
-	"github.com/example/gotaskq/internal/etl"
-	"github.com/example/gotaskq/internal/lock"
-	"github.com/example/gotaskq/internal/logger"
-	"github.com/example/gotaskq/internal/metrics"
-	"github.com/example/gotaskq/internal/queue"
-	"github.com/example/gotaskq/internal/reconciler"
-	"github.com/example/gotaskq/internal/retry"
-	"github.com/example/gotaskq/internal/scheduler"
-	"github.com/example/gotaskq/internal/service"
-	"github.com/example/gotaskq/internal/store"
-	"github.com/example/gotaskq/internal/webhook"
-	"github.com/example/gotaskq/internal/worker"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/api"
+	"github.com/example/conduit/internal/circuitbreaker"
+	"github.com/example/conduit/internal/config"
+	"github.com/example/conduit/internal/etl"
+	"github.com/example/conduit/internal/lock"
+	"github.com/example/conduit/internal/logger"
+	"github.com/example/conduit/internal/metrics"
+	"github.com/example/conduit/internal/queue"
+	"github.com/example/conduit/internal/reconciler"
+	"github.com/example/conduit/internal/retry"
+	"github.com/example/conduit/internal/scheduler"
+	"github.com/example/conduit/internal/service"
+	"github.com/example/conduit/internal/store"
+	"github.com/example/conduit/internal/webhook"
+	"github.com/example/conduit/internal/worker"
+	"github.com/example/conduit/pkg/models"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,7 +43,7 @@ func main() {
 	defer stop()
 
 	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintf(os.Stderr, "gotaskq: %v\n", err)
+		fmt.Fprintf(os.Stderr, "conduit: %v\n", err)
 		os.Exit(1)
 	}
 }

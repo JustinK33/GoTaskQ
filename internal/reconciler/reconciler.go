@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/gotaskq/internal/store"
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/internal/store"
+	"github.com/example/conduit/pkg/models"
 	"github.com/rs/zerolog"
 )
 

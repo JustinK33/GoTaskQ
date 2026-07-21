@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/gotaskq/pkg/models"
+	"github.com/example/conduit/pkg/models"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

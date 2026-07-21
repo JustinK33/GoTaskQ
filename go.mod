@@ -1,4 +1,4 @@
-module github.com/example/gotaskq
+module github.com/example/conduit
 
 go 1.23
 

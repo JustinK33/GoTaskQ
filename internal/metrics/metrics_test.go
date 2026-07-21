@@ -18,7 +18,7 @@ func TestNewRegistry(t *testing.T) {
 		namespace string
 		subsystem string
 	}{
-		{name: "builds namespace-scoped collectors", namespace: "gotaskq", subsystem: "worker"},
+		{name: "builds namespace-scoped collectors", namespace: "conduit", subsystem: "worker"},
 		{name: "different namespace", namespace: "myapp", subsystem: "api"},
 	}
 
@@ -46,7 +46,7 @@ func TestNewRegistry(t *testing.T) {
 
 func TestRegistryRegister(t *testing.T) {
 	t.Run("registers collectors without error", func(t *testing.T) {
-		r := NewRegistry("gotaskq", "worker")
+		r := NewRegistry("conduit", "worker")
 		if r == nil {
 			t.Skip("NewRegistry not yet implemented")
 		}
@@ -58,7 +58,7 @@ func TestRegistryRegister(t *testing.T) {
 
 func TestRegistryHandler(t *testing.T) {
 	t.Run("returns a non-nil scrape handler", func(t *testing.T) {
-		r := NewRegistry("gotaskq", "worker")
+		r := NewRegistry("conduit", "worker")
 		if r == nil {
 			t.Skip("NewRegistry not yet implemented")
 		}

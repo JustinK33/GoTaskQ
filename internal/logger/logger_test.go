@@ -16,23 +16,23 @@ func TestNew(t *testing.T) {
 	}{
 		{
 			name:      "debug level",
-			cfg:       Config{Level: "debug", ServiceName: "gotaskq"},
+			cfg:       Config{Level: "debug", ServiceName: "conduit"},
 			wantLevel: zerolog.DebugLevel,
 		},
 		{
 			name:      "info level",
-			cfg:       Config{Level: "info", ServiceName: "gotaskq"},
+			cfg:       Config{Level: "info", ServiceName: "conduit"},
 			wantLevel: zerolog.InfoLevel,
 		},
 		{
 			name:      "warn level",
-			cfg:       Config{Level: "warn", ServiceName: "gotaskq"},
+			cfg:       Config{Level: "warn", ServiceName: "conduit"},
 			wantLevel: zerolog.WarnLevel,
 		},
 		{
-			name:      "invalid level returns error",
-			cfg:       Config{Level: "notavalidlevel"},
-			wantErr:   true,
+			name:    "invalid level returns error",
+			cfg:     Config{Level: "notavalidlevel"},
+			wantErr: true,
 		},
 	}
 
