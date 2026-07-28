@@ -6,6 +6,8 @@
   <img src="ARCHITECTURE.png" alt="Architecture Diagram" width="800"/>
 </p>
 
+Conduit runs your background jobs and data pipelines so they survive crashes, retries, and restarts without you having to babysit them.
+
 Conduit is a reliable data workflow runtime built on a production-grade distributed task queue written in Go.
 It runs webhook jobs and SQL ELT pipelines with Kafka transport, PostgreSQL job state, Redis distributed locking, bounded workers, retry backoff, lease recovery, and Prometheus observability.
 It is designed for teams that need dependable background work and lightweight data workflows without adopting a heavyweight orchestration platform.
