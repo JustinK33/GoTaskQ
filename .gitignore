@@ -51,3 +51,4 @@ testdata/*.tmp
 # Generated Docker and compose state
 docker-data/
 *.pid
+.claude2
