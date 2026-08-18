@@ -99,10 +99,17 @@ deploy/prometheus/   ← prometheus.yml scrape config
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/jobs` | Enqueue a new job; returns `{"id": "..."}` |
+| `GET` | `/api/jobs` | List jobs; filter with `?state=`, page with `?limit=` and `?cursor=` |
+| `GET` | `/api/jobs/by-idempotency-key/:key` | Fetch the job created for a given idempotency key |
 | `GET` | `/api/jobs/:id` | Fetch job state and timestamps |
 | `POST` | `/api/jobs/:id/cancel` | Cancel a job (transitions to `DEAD`) |
 | `GET` | `/metrics` | Prometheus scrape endpoint |
-| `GET` | `/health` | Liveness probe |
+| `GET` | `/live` | Liveness probe (process only) |
+| `GET` | `/ready` | Readiness probe (checks Postgres and Redis) |
+| `GET` | `/health` | Combined health summary |
+
+`state` must be one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `DEAD`.
+The enqueue body accepts `idempotency_key` and `scheduled_at` alongside `task`.
 
 ### Example
 
@@ -190,8 +197,8 @@ make test
 # Unit tests with race detector
 make test-race
 
-# Integration tests (requires make docker-up)
-go test ./... -tags=integration
+# Microbenchmarks
+make bench
 ```
 
 ---

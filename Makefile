@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps test test-race vet build tidy enqueue enqueue-elt status list ready
+.PHONY: up down restart logs ps test test-race bench vet build tidy enqueue enqueue-elt status list ready
 
 # Start the full stack (builds the app image, waits for health checks)
 up:
@@ -26,6 +26,10 @@ test:
 # Run tests with the race detector
 test-race:
 	go test -race ./...
+
+# Run microbenchmarks only (-run=^$$ skips the unit tests)
+bench:
+	go test -bench=. -benchmem -run=^$$ ./...
 
 # Run the Go static analyzer
 vet:

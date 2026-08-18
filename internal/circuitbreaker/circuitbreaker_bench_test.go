@@ -1,6 +1,7 @@
 package circuitbreaker
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -37,20 +38,22 @@ func BenchmarkBreakerAllowOpen(b *testing.B) {
 }
 
 // BenchmarkBreakerRecordSuccess measures RecordSuccess() in HalfOpen state.
+// SuccessThreshold is set past any reachable b.N so the breaker stays HalfOpen
+// for the whole run and setup stays out of the timed loop. Rebuilding the
+// breaker per iteration behind StopTimer/StartTimer instead makes the framework
+// inflate b.N without bound - the benchmark then runs for many minutes.
 func BenchmarkBreakerRecordSuccess(b *testing.B) {
+	br := New(Config{
+		FailureThreshold: 1,
+		SuccessThreshold: math.MaxInt32,
+		OpenTimeout:      0,
+		HalfOpenRequests: 1,
+	})
+	br.RecordFailure()
+	br.Allow() // transitions to HalfOpen
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		br := New(Config{
-			FailureThreshold: 1,
-			SuccessThreshold: 2,
-			OpenTimeout:      0,
-			HalfOpenRequests: 1,
-		})
-		br.RecordFailure()
-		br.Allow() // transitions to HalfOpen
-		b.StartTimer()
 		br.RecordSuccess()
 	}
 }

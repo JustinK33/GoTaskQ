@@ -118,13 +118,24 @@ The `sql.etl` handler reads a pipeline spec from `task.payload`, validates targe
 This turns the queue into a small data workflow runtime for operational analytics.
 
 ### `internal/api`
-Three Gin endpoints:
+Five Gin job endpoints, registered in `RegisterRoutes`:
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/jobs` | Requires `task.name`; returns the assigned job ID. |
+| `POST` | `/api/jobs` | Requires `task.name`; returns the assigned job ID. Optional `idempotency_key` and `scheduled_at`. |
+| `GET`  | `/api/jobs` | Cursor-paginated list. Query params: `state` (PENDING / RUNNING / COMPLETED / FAILED / DEAD), `limit`, `cursor`. |
+| `GET`  | `/api/jobs/by-idempotency-key/:key` | Look up the job a given idempotency key produced. |
 | `GET`  | `/api/jobs/:id` | Reads directly from Postgres. |
 | `POST` | `/api/jobs/:id/cancel` | Transitions job to DEAD. |
+
+Operational routes live on the root router in `cmd/server/main.go`, outside this group:
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET` | `/metrics` | Prometheus scrape endpoint. |
+| `GET` | `/live` | Liveness - process is up, no dependency checks. |
+| `GET` | `/ready` | Readiness - probes Postgres and the Redis nodes. |
+| `GET` | `/health` | Combined health summary. |
 
 Metrics middleware counts requests by method / path / status.
 
@@ -259,9 +270,10 @@ go run ./cmd/server
 Tests (no infra needed):
 
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
+go test ./...                            # or: make test
+go test -race ./...                      # or: make test-race
+go test -bench=. -benchmem -run=^$ ./... # or: make bench
+go vet ./...                             # or: make vet
 ```
 
 Endpoints:
@@ -269,8 +281,11 @@ Endpoints:
 | | |
 |--|--|
 | `POST localhost:8080/api/jobs` | Enqueue |
+| `GET  localhost:8080/api/jobs` | List (filter with `?state=`, `?limit=`, `?cursor=`) |
+| `GET  localhost:8080/api/jobs/by-idempotency-key/:key` | Look up by idempotency key |
 | `GET  localhost:8080/api/jobs/:id` | Status |
 | `POST localhost:8080/api/jobs/:id/cancel` | Cancel |
+| `GET  localhost:8080/live` `/ready` `/health` | Probes |
 | `GET  localhost:8080/metrics` | Prometheus |
 | `GET  localhost:9090` | Prometheus UI |
 | `GET  localhost:3000` | Grafana (admin / admin) |

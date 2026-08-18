@@ -39,3 +39,21 @@ Enqueue a sample job and check its status:
 make enqueue url=https://example.com/webhook
 make status id=<id-from-above>
 ```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - system diagram, job state machine, per-package breakdown, design decisions
+- [API reference](PROJECT.md#api-endpoints) - endpoints and curl examples
+- [Feature deep dives](docs/FEATURES.md) - async Kafka publish, Redlock, Kubernetes and CI/CD
+- [SQL ELT use case](docs/use-cases/sql-elt.md) - pipeline config and a worked example
+
+## Testing
+
+```bash
+make test        # unit tests
+make test-race   # race detector
+make bench       # microbenchmarks
+```
+
+CI runs vet, tests, and the race detector on every push, then boots a live stack (Kafka, 3x Redis, Postgres) and drives it with a k6 load test ([`loadtest/k6.js`](loadtest/k6.js)).
+See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
